@@ -1,0 +1,111 @@
+defmodule Stallalert.Conditions do
+  @moduledoc """
+  Caches normalized windguru data for the last requested position and
+  refreshes it in the background (forecast 15 min, station 5 min).
+  """
+  use GenServer
+
+  @forecast_ttl_ms 15 * 60 * 1000
+  @station_ttl_ms 5 * 60 * 1000
+  @grace_ms 10 * 60 * 1000
+
+  # Client
+
+  def start_link(opts) do
+    {name, opts} = Keyword.pop(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, if(name, do: [name: name], else: []))
+  end
+
+  def get(server \\ __MODULE__, lat, lon), do: GenServer.call(server, {:get, lat, lon}, 15_000)
+
+  # Server
+
+  @impl true
+  def init(opts) do
+    refresh? = Keyword.get(opts, :refresh, true)
+    if refresh?, do: Process.send_after(self(), :refresh, @station_ttl_ms)
+    {:ok, %{pos: nil, forecast: nil, station: nil, refresh?: refresh?}}
+  end
+
+  @impl true
+  def handle_call({:get, lat, lon}, _from, state) do
+    state = %{state | pos: {lat, lon}}
+    state = maybe_refresh(state, now_ms())
+
+    case build_payload(state) do
+      nil -> {:reply, {:error, :no_data}, state}
+      payload -> {:reply, {:ok, payload}, state}
+    end
+  end
+
+  @impl true
+  def handle_info(:refresh, %{pos: nil} = state) do
+    reschedule(state)
+    {:noreply, state}
+  end
+
+  def handle_info(:refresh, state) do
+    state = maybe_refresh(state, now_ms())
+    reschedule(state)
+    {:noreply, state}
+  end
+
+  defp reschedule(%{refresh?: true}), do: Process.send_after(self(), :refresh, @station_ttl_ms)
+  defp reschedule(_), do: :ok
+
+  defp maybe_refresh(%{pos: {lat, lon}} = state, now) do
+    adapter = Application.fetch_env!(:stallalert, :windguru_adapter)
+
+    forecast =
+      refresh_entry(state.forecast, @forecast_ttl_ms, now, fn -> adapter.forecast(lat, lon) end)
+
+    station =
+      refresh_entry(state.station, @station_ttl_ms, now, fn ->
+        case adapter.nearest_station(lat, lon) do
+          {:ok, nil} ->
+            {:ok, nil}
+
+          {:ok, info} ->
+            case adapter.station_reading(info.id) do
+              {:ok, reading} -> {:ok, Map.put(info, :reading, reading)}
+              {:error, _} = e -> e
+            end
+
+          {:error, _} = e ->
+            e
+        end
+      end)
+
+    %{state | forecast: forecast, station: station}
+  end
+
+  # entry: %{data: term, fetched_at: ms} | nil
+  defp refresh_entry(entry, ttl, now, fetch_fun) do
+    fresh? = entry != nil and now - entry.fetched_at < ttl
+
+    if fresh? do
+      entry
+    else
+      case fetch_fun.() do
+        {:ok, data} -> %{data: data, fetched_at: now}
+        {:error, _} -> entry
+      end
+    end
+  end
+
+  defp build_payload(%{forecast: nil}), do: nil
+
+  defp build_payload(state) do
+    now = now_ms()
+    stale? = now - state.forecast.fetched_at > @forecast_ttl_ms + @grace_ms
+
+    %{
+      generated_at: DateTime.utc_now(),
+      stale: stale?,
+      forecast: state.forecast.data,
+      station: state.station && state.station.data
+    }
+  end
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
+end
