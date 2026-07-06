@@ -23,8 +23,10 @@ defmodule Stallalert.Conditions do
   @impl true
   def init(opts) do
     refresh? = Keyword.get(opts, :refresh, true)
+    forecast_ttl_ms = Keyword.get(opts, :forecast_ttl_ms, @forecast_ttl_ms)
+    station_ttl_ms = Keyword.get(opts, :station_ttl_ms, @station_ttl_ms)
     if refresh?, do: Process.send_after(self(), :refresh, @station_ttl_ms)
-    {:ok, %{pos: nil, forecast: nil, station: nil, refresh?: refresh?}}
+    {:ok, %{pos: nil, forecast: nil, station: nil, refresh?: refresh?, forecast_ttl_ms: forecast_ttl_ms, station_ttl_ms: station_ttl_ms}}
   end
 
   @impl true
@@ -57,10 +59,10 @@ defmodule Stallalert.Conditions do
     adapter = Application.fetch_env!(:stallalert, :windguru_adapter)
 
     forecast =
-      refresh_entry(state.forecast, @forecast_ttl_ms, now, fn -> adapter.forecast(lat, lon) end)
+      refresh_entry(state.forecast, state.forecast_ttl_ms, now, fn -> adapter.forecast(lat, lon) end)
 
     station =
-      refresh_entry(state.station, @station_ttl_ms, now, fn ->
+      refresh_entry(state.station, state.station_ttl_ms, now, fn ->
         case adapter.nearest_station(lat, lon) do
           {:ok, nil} ->
             {:ok, nil}
@@ -97,7 +99,7 @@ defmodule Stallalert.Conditions do
 
   defp build_payload(state) do
     now = now_ms()
-    stale? = now - state.forecast.fetched_at > @forecast_ttl_ms + @grace_ms
+    stale? = now - state.forecast.fetched_at > state.forecast_ttl_ms + @grace_ms
 
     %{
       generated_at: DateTime.utc_now(),

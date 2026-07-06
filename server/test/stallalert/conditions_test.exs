@@ -33,15 +33,19 @@ defmodule Stallalert.ConditionsTest do
     assert c.station.reading.wind_kn == 15.5
   end
 
-  test "fetch failure with an existing cache serves stale data", %{pid: pid} do
+  test "fetch failure with an existing cache serves last good data" do
+    pid = start_supervised!(
+      {Conditions, name: nil, refresh: false, forecast_ttl_ms: 0, station_ttl_ms: 0},
+      id: :zero_ttl
+    )
     assert {:ok, _} = Conditions.get(pid, 52.36, 5.04)
     FakeAdapter.set(:forecast, {:error, :boom})
+    FakeAdapter.set(:nearest_station, {:error, :boom})
     FakeAdapter.set(:station_reading, {:error, :boom})
-    # force a refresh tick that fails
-    send(pid, :refresh)
+    # TTL 0 forces a real re-fetch on this get; the fetch fails; last good data must survive.
     assert {:ok, c} = Conditions.get(pid, 52.36, 5.04)
-    # last good data still served
     assert c.forecast.model == "wg"
+    assert c.station.name == "TestStn"
   end
 
   test "no cache and failing fetch returns no_data", %{pid: pid} do
