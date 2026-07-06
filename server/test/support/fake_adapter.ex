@@ -4,17 +4,35 @@ defmodule Stallalert.FakeAdapter do
   def set(key, value), do: :persistent_term.put({__MODULE__, key}, value)
   defp get_resp(key, default), do: :persistent_term.get({__MODULE__, key}, default)
 
+  def reset do
+    :persistent_term.erase({__MODULE__, :forecast})
+    :persistent_term.erase({__MODULE__, :nearest_station})
+    :persistent_term.erase({__MODULE__, :station_reading})
+    :ok
+  end
+
   @impl true
   def forecast(_lat, _lon) do
-    get_resp(
-      :forecast,
-      {:ok,
-       %{
-         model: "wg",
-         init_time: ~U[2026-07-06 06:00:00Z],
-         hours: [%{time: ~U[2026-07-06 10:00:00Z], wind_kn: 14.0, gust_kn: 21.0, dir_deg: 225.0}]
-       }}
-    )
+    get_resp(:forecast, {:ok, default_forecast()})
+  end
+
+  # Hours are generated relative to "now" (rather than a fixed timestamp) so
+  # the router's now-1h..+12-steps trimming always has data to work with,
+  # regardless of when the suite runs.
+  defp default_forecast do
+    now = DateTime.utc_now()
+
+    hours =
+      for offset <- -2..13 do
+        %{
+          time: DateTime.add(now, offset * 3600, :second),
+          wind_kn: 14.0,
+          gust_kn: 21.0,
+          dir_deg: 225.0
+        }
+      end
+
+    %{model: "wg", init_time: DateTime.add(now, -4 * 3600, :second), hours: hours}
   end
 
   @impl true

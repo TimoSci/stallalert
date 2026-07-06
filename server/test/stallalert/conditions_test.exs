@@ -4,6 +4,8 @@ defmodule Stallalert.ConditionsTest do
   alias Stallalert.{Conditions, FakeAdapter}
 
   setup do
+    FakeAdapter.reset()
+
     FakeAdapter.set(
       :forecast,
       {:ok,
