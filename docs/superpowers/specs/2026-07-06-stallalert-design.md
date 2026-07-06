@@ -5,11 +5,16 @@
 
 ## Purpose
 
-A standalone Apple Watch app for kitesurfing that shows the Windguru wind
-forecast (next hour) and live measurements for the rider's GPS position, and
-raises a loud haptic + audible alarm when the wind is predicted or measured to
-drop below a configurable threshold — so the rider can head in before the kite
+An Apple Watch app for kitesurfing that shows the Windguru wind forecast
+(next hour) and live measurements for the rider's GPS position, and raises a
+loud haptic + audible alarm when the wind is predicted or measured to drop
+below a configurable threshold — so the rider can head in before the kite
 stalls.
+
+The watch gets its data from a **self-hosted intermediary service** (Elixir,
+running on the user's fixed-IP host behind a domain name). Only when that
+service is unreachable does the watch fall back to fetching from Windguru
+directly.
 
 The user has a Windguru PRO subscription and a cellular Apple Watch.
 
@@ -22,35 +27,77 @@ The user has a Windguru PRO subscription and a cellular Apple Watch.
 | Current measurements | Nearest Windguru live station to GPS position, with distance shown |
 | Alert trigger | Forecast next-hour min **or** live station reading below threshold; fires once per event, re-arms after recovery (+2 kn hysteresis) |
 | Runtime model | HealthKit workout session (water sports) keeps the app alive, GPS hot, and guarantees haptics |
-| Architecture | A: watch talks to Windguru directly; no proxy, no iPhone app (client isolated behind a protocol so a proxy can be added later) |
+| Architecture | Self-hosted intermediary service is the primary data source; watch falls back to direct Windguru access only when the service is down. No iPhone app. |
+| Service stack | Elixir (Plug + Bandit, Req HTTP client), GenServer poller with ETS cache, shipped as a mix release in Docker on the user's fixed-IP host |
+| Service TLS | Domain name pointed at the fixed IP + auto-renewed Let's Encrypt certificate (keeps watchOS ATS happy) |
 
-## Platform
+## Platform & repo layout
 
-- watchOS 11+, SwiftUI, Swift. Single Xcode project, watch-only app target.
-- No iPhone UI in v1; settings live on the watch.
+- Watch app: watchOS 11+, SwiftUI, Swift. Single Xcode project, watch-only
+  app target. No iPhone UI in v1; settings live on the watch.
+- Intermediary service: Elixir ~> 1.17, Plug + Bandit, Req for HTTP, Jason
+  for JSON. Packaged as a mix release in a Docker container, deployed on the
+  user's fixed-IP host, reached via a domain name with an auto-renewed
+  Let's Encrypt certificate.
+- One repo, two top-level directories: `watch/` (Xcode project) and
+  `server/` (Elixir app).
 
 ## Components
 
 Each unit has one purpose, a defined interface, and is testable in isolation.
 
-### 1. `WindguruClient` (protocol + `LiveWindguruClient`)
-All Windguru HTTP access. Nothing else in the app touches the network.
+### 0. Intermediary service (`server/`, Elixir)
 
-- `forecast(lat:lon:) async throws -> ForecastTimeline` — normalized hourly
-  timeline of wind speed, gusts, direction. Primary source: the widget JSON
-  endpoint (`www.windguru.cz/int/iapi.php?q=forecast`) with PRO login, WG
-  model. Fallback: PRO micro API (`micro.windguru.cz`, lat/lon + username +
-  secondary password, text format).
-- `nearestStations(lat:lon:) async throws -> [Station]` and
-  `currentReading(stationID:) async throws -> StationReading` — stations JSON
-  API for live wind.
-- Credentials in Keychain. Parse failures throw a typed `dataSourceError`,
-  never crash or return silent zeros.
+The primary data source for the watch. Logs into Windguru, fetches and
+normalizes forecast + nearest-station data, and serves one small JSON payload.
 
-**Risk (top of list):** these endpoints are unofficial. First implementation
-task is to verify real response shapes with the user's PRO account, using
-captured payloads as test fixtures. If unusable, fall back to micro API or
-revisit the proxy approach behind the same protocol.
+- **HTTP API** (Plug + Bandit, HTTPS via the host's reverse proxy or directly
+  terminated in the app):
+  - `GET /v1/conditions?lat=..&lon=..` → `{forecast: ForecastTimeline,
+    station: {info, reading} | null, generated_at}` — everything the watch
+    needs in one round-trip (small payload, good over cellular).
+  - `GET /v1/health` → 200 when the service can serve data.
+  - Auth: static bearer token shared with the watch app (set in server config,
+    stored in the watch Keychain).
+- **Poller (GenServer):** fetches Windguru on a schedule (forecast every
+  15 min, station readings every 5 min) for the most recently requested
+  position(s), caches normalized results in ETS. Watch requests are served
+  from cache, so a Windguru hiccup never blocks a watch request. A cache
+  entry older than its refresh interval + grace is served with a `stale: true`
+  flag rather than dropped.
+- **Windguru adapter:** the only module that knows Windguru's formats.
+  Primary: widget JSON endpoint (`www.windguru.cz/int/iapi.php?q=forecast`)
+  with PRO login, WG model; stations JSON API for live readings. Fallback:
+  PRO micro API (lat/lon + username + secondary password, text format).
+  Windguru credentials live in the server's runtime config (env vars) — not
+  on the watch, except for the watch's own direct-fallback mode (below).
+  A parse crash is isolated by the supervision tree; the service keeps
+  serving the last good cached payload.
+
+**Risk (top of list):** the Windguru endpoints are unofficial. First
+implementation task is to verify real response shapes with the user's PRO
+account, using captured payloads as test fixtures. The service is the place
+where format changes get fixed — a server redeploy, no app-store cycle.
+
+### 1. Watch data layer: `WindDataProvider` protocol, two implementations
+
+Nothing else in the watch app touches the network. Both implementations
+return the same normalized types (`ForecastTimeline`, `Station`,
+`StationReading`).
+
+- **`ServiceClient` (primary):** calls the self-hosted service's
+  `/v1/conditions` with the bearer token. One request per refresh tick.
+- **`DirectWindguruClient` (fallback):** talks to Windguru's endpoints
+  directly (same adapter logic as the server, in Swift; micro API as its own
+  fallback). Uses Windguru credentials stored in the watch Keychain.
+- **`FailoverProvider`:** wraps both. Tries the service (5 s timeout); on
+  timeout, connection error, or 5xx, marks the service down, serves the tick
+  via `DirectWindguruClient`, and surfaces the active source to the UI.
+  While down, it re-probes `/v1/health` on each tick and switches back as
+  soon as the service responds. Auth errors (401) are surfaced as
+  configuration errors, not treated as "down".
+- Parse failures anywhere throw a typed `dataSourceError`, never crash or
+  return silent zeros.
 
 ### 2. `ForecastEngine` (pure logic)
 Input: `ForecastTimeline` + current time. Output: `NextHourView` — base wind
@@ -67,10 +114,13 @@ Alert events carry their cause: `.predicted` or `.measured`.
 
 ### 4. `SessionController`
 Wraps `HKWorkoutSession` (water sports activity type) + CoreLocation.
-Owns the refresh loop: forecast every 15 min, station reading every 5 min,
-re-resolve nearest station when position moves > 2 km. Feeds `ForecastEngine`
-and `AlertPolicy`; exposes observable state to the UI. Enables Water Lock on
-session start.
+Owns the refresh loop: one `WindDataProvider` fetch every 5 min (cheap —
+the service answers from its cache; in direct-fallback mode the provider
+fetches the forecast at most every 15 min and the station every 5 min to
+limit Windguru traffic). Re-resolves the nearest station when position moves
+> 2 km. Feeds `ForecastEngine` and `AlertPolicy`; exposes observable state,
+including the active data source (service / direct / cached-offline), to the
+UI. Enables Water Lock on session start.
 
 ### 5. `AlertPresenter`
 Plays the alarm: strongest available haptic pattern + audible tone
@@ -88,28 +138,41 @@ Includes a "test alarm" action used from settings.
   threshold) / red (below).
 - **Alert screen:** full-screen red, cause-labelled ("predicted" vs
   "measured now"), tap to acknowledge.
-- **Settings:** threshold (default 12 kn), units (default knots), Windguru
-  credentials, test alarm.
+- **Settings:** threshold (default 12 kn), units (default knots), service
+  URL + bearer token, Windguru credentials (for direct fallback), test alarm.
+- The session screen shows a small data-source badge when not on the normal
+  path: "direct" when the service is down, "offline" when serving cached data.
 
 ## Data flow
 
 ```
-GPS (CoreLocation)
-   │
-SessionController ──▶ WindguruClient ──▶ ForecastEngine ──▶ UI
-   │                        │                  │
-   │                        └── station ───────┤
-   │                                           ▼
-   └──────────────────────────────────▶ AlertPolicy ──▶ AlertPresenter
+                         ┌── primary ──▶ self-hosted service ──▶ Windguru
+GPS (CoreLocation)       │                 (Elixir, cache)
+   │                     │
+SessionController ──▶ FailoverProvider ──▶ ForecastEngine ──▶ UI
+   │                     │                       │
+   │                     └── fallback ──▶ Windguru (direct)
+   │                                             ▼
+   └────────────────────────────────────▶ AlertPolicy ──▶ AlertPresenter
 ```
 
 ## Error handling
 
-- **Offline mid-session:** keep last-fetched forecast (still valid), badge the
-  live block "no signal", retry with exponential backoff. Predicted-drop
-  alerts keep working from cache.
-- **Endpoint broken / parse failure:** explicit "data source error" state.
-- **Auth failure:** explicit "check Windguru login" state.
+- **Service unreachable (timeout 5 s, connection error, or 5xx):**
+  `FailoverProvider` switches to direct Windguru access for that tick and
+  shows a "direct" badge; it re-probes `/v1/health` each tick and switches
+  back automatically. A service 401 is a config error ("check service
+  token"), not failover.
+- **Fully offline mid-session (service AND direct unreachable):** keep
+  last-fetched forecast (still valid — it's a forecast), badge the live block
+  "no signal", retry with exponential backoff. Predicted-drop alerts keep
+  working from cache.
+- **Windguru broken (format change / outage):** the service keeps serving its
+  last good cache with `stale: true`; the watch shows data age honestly.
+  Parse failures on either side surface as an explicit "data source error"
+  state.
+- **Auth failure against Windguru:** explicit "check Windguru login" state
+  (on the server: logged + health stays OK while cache is fresh).
 - **No station within 30 km:** live block shows "no station nearby";
   forecast-only alerting.
 - **Stale data:** station reading > 20 min old grays out with age warning —
@@ -123,10 +186,16 @@ SessionController ──▶ WindguruClient ──▶ ForecastEngine ──▶ UI
 - Unit tests for `ForecastEngine` and `AlertPolicy` (pure): threshold
   crossings, hysteresis re-arm, trend interpolation (1 h and 3 h steps),
   timezone/DST boundaries, stale-data exclusion.
-- `WindguruClient` tested against recorded real fixture payloads; one opt-in
-  live integration test using real credentials.
+- Server (ExUnit): Windguru adapter tested against recorded real fixture
+  payloads; poller/cache behavior (staleness flags, crash recovery); one
+  opt-in live integration test using real credentials.
+- Watch: `ServiceClient` and `DirectWindguruClient` tested against fixtures;
+  `FailoverProvider` tested for down-detection, per-tick recovery probing,
+  and 401-vs-down distinction (with a stubbed service).
 - Manual on-hardware verification for haptics, audio, Water Lock, cellular,
-  and workout-session lifecycle (simulator cannot cover these).
+  and workout-session lifecycle (simulator cannot cover these). End-to-end
+  check includes killing the service mid-session and watching the app fail
+  over and recover.
 
 ## Out of scope (v1)
 
