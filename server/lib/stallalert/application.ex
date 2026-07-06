@@ -7,9 +7,12 @@ defmodule Stallalert.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      {Bandit, plug: Stallalert.Router, port: String.to_integer(System.get_env("PORT") || "4000")}
-    ]
+    children =
+      if Mix.env() == :test do
+        []
+      else
+        [{Bandit, plug: Stallalert.Router, port: String.to_integer(System.get_env("PORT") || "4000")}]
+      end
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
