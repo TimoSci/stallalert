@@ -34,10 +34,12 @@ defmodule Stallalert.ConditionsTest do
   end
 
   test "fetch failure with an existing cache serves last good data" do
-    pid = start_supervised!(
-      {Conditions, name: nil, refresh: false, forecast_ttl_ms: 0, station_ttl_ms: 0},
-      id: :zero_ttl
-    )
+    pid =
+      start_supervised!(
+        {Conditions, name: nil, refresh: false, forecast_ttl_ms: 0, station_ttl_ms: 0},
+        id: :zero_ttl
+      )
+
     assert {:ok, _} = Conditions.get(pid, 52.36, 5.04)
     FakeAdapter.set(:forecast, {:error, :boom})
     FakeAdapter.set(:nearest_station, {:error, :boom})
@@ -57,5 +59,36 @@ defmodule Stallalert.ConditionsTest do
     FakeAdapter.set(:nearest_station, {:ok, nil})
     assert {:ok, c} = Conditions.get(pid, 52.36, 5.04)
     assert c.station == nil
+  end
+
+  test "serves stale: true when forecast cannot be refreshed past ttl+grace" do
+    pid =
+      start_supervised!(
+        {Conditions, name: nil, refresh: false, forecast_ttl_ms: 0, grace_ms: 0},
+        id: :forecast_stale
+      )
+
+    assert {:ok, _} = Conditions.get(pid, 52.36, 5.04)
+    FakeAdapter.set(:forecast, {:error, :boom})
+    Process.sleep(10)
+    assert {:ok, c} = Conditions.get(pid, 52.36, 5.04)
+    assert c.stale == true
+    assert c.forecast.model == "wg"
+  end
+
+  test "serves stale: true when only the station reading is past its ttl+grace" do
+    pid =
+      start_supervised!(
+        {Conditions, name: nil, refresh: false, station_ttl_ms: 0, grace_ms: 0},
+        id: :station_stale
+      )
+
+    assert {:ok, _} = Conditions.get(pid, 52.36, 5.04)
+    FakeAdapter.set(:nearest_station, {:error, :boom})
+    FakeAdapter.set(:station_reading, {:error, :boom})
+    Process.sleep(10)
+    assert {:ok, c} = Conditions.get(pid, 52.36, 5.04)
+    assert c.stale == true
+    assert c.station.name == "TestStn"
   end
 end
