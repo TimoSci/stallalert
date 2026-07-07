@@ -62,6 +62,35 @@ defmodule Stallalert.Windguru.StationParserTest do
       assert {:error, :unexpected_format} = StationParser.parse_reading(%{})
       assert {:error, :unexpected_format} = StationParser.parse_reading(%{"wind_avg" => 5})
     end
+
+    test "rejects unequal-length parallel arrays" do
+      # wind_direction has one fewer element (missing the newest sample)
+      payload = %{
+        "unixtime" => [1_700_000_000, 1_700_000_300, 1_700_000_600],
+        "wind_avg" => [1.0, 2.0, 9.9],
+        "wind_max" => [1.5, 2.5, 12.0],
+        "wind_direction" => [100, 200]
+      }
+
+      assert {:error, :unexpected_format} = StationParser.parse_reading(payload)
+    end
+
+    test "picks latest fully-populated sample when the newest sample has nil wind values" do
+      # unixtime is sorted; index 2 is the newest, but has nil values
+      # index 1 is older but fully populated and should be returned
+      payload = %{
+        "unixtime" => [1_700_000_000, 1_700_000_300, 1_700_000_600],
+        "wind_avg" => [1.0, 2.0, nil],
+        "wind_max" => [1.5, 2.5, nil],
+        "wind_direction" => [100, 200, nil]
+      }
+
+      assert {:ok, r} = StationParser.parse_reading(payload)
+      assert r.time == DateTime.from_unix!(1_700_000_300)
+      assert r.wind_kn == 2.0
+      assert r.gust_kn == 2.5
+      assert r.dir_deg == 200.0
+    end
   end
 
   describe "parse_station_list/1 (q=station_list array of station objects)" do

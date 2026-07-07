@@ -22,7 +22,8 @@ defmodule Stallalert.Windguru.StationParser do
   empty, or every sample is missing a wind value (the station went silent
   for the whole window), there is no usable sample and parsing fails with
   `{:error, :unexpected_format}` — callers should treat that the same as a
-  failed fetch.
+  failed fetch. If the parallel arrays' lengths don't match, parsing fails
+  with `{:error, :unexpected_format}`.
 
   ## `parse_station_list/1` — `q=station_list`
 
@@ -58,25 +59,31 @@ defmodule Stallalert.Windguru.StationParser do
         "wind_direction" => dirs
       })
       when is_list(uts) and is_list(avgs) and is_list(maxs) and is_list(dirs) do
-    [uts, avgs, maxs, dirs]
-    |> Enum.zip()
-    |> Enum.filter(fn {t, avg, max, dir} ->
-      is_integer(t) and is_number(avg) and is_number(max) and is_number(dir)
-    end)
-    |> case do
-      [] ->
-        {:error, :unexpected_format}
+    with true <- length(uts) == length(avgs),
+         true <- length(uts) == length(maxs),
+         true <- length(uts) == length(dirs) do
+      [uts, avgs, maxs, dirs]
+      |> Enum.zip()
+      |> Enum.filter(fn {t, avg, max, dir} ->
+        is_integer(t) and is_number(avg) and is_number(max) and is_number(dir)
+      end)
+      |> case do
+        [] ->
+          {:error, :unexpected_format}
 
-      samples ->
-        {t, avg, max, dir} = Enum.max_by(samples, fn {t, _avg, _max, _dir} -> t end)
+        samples ->
+          {t, avg, max, dir} = Enum.max_by(samples, fn {t, _avg, _max, _dir} -> t end)
 
-        {:ok,
-         %{
-           time: DateTime.from_unix!(t),
-           wind_kn: avg * 1.0,
-           gust_kn: max * 1.0,
-           dir_deg: dir * 1.0
-         }}
+          {:ok,
+           %{
+             time: DateTime.from_unix!(t),
+             wind_kn: avg * 1.0,
+             gust_kn: max * 1.0,
+             dir_deg: dir * 1.0
+           }}
+      end
+    else
+      _ -> {:error, :unexpected_format}
     end
   end
 
