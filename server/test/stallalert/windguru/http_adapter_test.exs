@@ -30,6 +30,18 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
     assert {:ok, %{model: "GFS 13 km", hours: [_ | _]}} = HTTPAdapter.forecast(52.36, 5.04)
   end
 
+  test "forecast/2 decodes a JSON body even when the response has a non-JSON content-type" do
+    System.put_env("WG_COOKIE", "langc=en; session=fake; login_md5=fake")
+
+    Req.Test.stub(HTTPAdapter, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("text/html")
+      |> Plug.Conn.send_resp(200, File.read!("test/fixtures/windguru/forecast_custom.json"))
+    end)
+
+    assert {:ok, %{model: _, hours: [_ | _]}} = HTTPAdapter.forecast(52.36, 5.04)
+  end
+
   test "station_reading/1 fetches and normalizes" do
     Req.Test.stub(HTTPAdapter, fn conn -> Req.Test.json(conn, @reading) end)
     assert {:ok, %{wind_kn: _}} = HTTPAdapter.station_reading(1234)

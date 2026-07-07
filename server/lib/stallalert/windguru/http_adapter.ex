@@ -17,6 +17,15 @@ defmodule Stallalert.Windguru.HTTPAdapter do
       parsed station list is cached in `:persistent_term` for 6 hours to
       avoid hammering Windguru on every station refresh.
 
+  Response bodies are decoded content-type-independently: `iapi.php` is a
+  legacy, undocumented PHP endpoint, and while probing found it currently
+  sends a genuine JSON `Content-Type` (see "Content-Type findings" in
+  `docs/windguru-api-notes.md`), that's an observation, not a guarantee.
+  Rather than depend on `Req`'s auto-decode (which only triggers for a
+  recognized JSON content-type), a 200 response with a raw binary body is
+  explicitly run through `Jason.decode/1` here, so a mislabeled or missing
+  `Content-Type` header can't turn every success into `:unexpected_format`.
+
   ## Cookie strategy
 
   No automated login flow was discovered within this task's probing budget
@@ -96,6 +105,9 @@ defmodule Stallalert.Windguru.HTTPAdapter do
   def clear_station_cache, do: :persistent_term.erase(@station_cache_key)
 
   defp fetch_station_list do
+    # Check-then-put race accepted: this is single-node with a 6h TTL, so the
+    # worst case of two concurrent callers both missing the cache is a
+    # duplicate fetch (both write the same result), not a correctness bug.
     case :persistent_term.get(@station_cache_key, nil) do
       {fetched_at, stations} ->
         if System.system_time(:second) - fetched_at < @station_cache_ttl_seconds do
@@ -134,6 +146,18 @@ defmodule Stallalert.Windguru.HTTPAdapter do
     case Req.get(req) do
       {:ok, %Req.Response{status: 200, body: body}} when is_map(body) or is_list(body) ->
         {:ok, body}
+
+      {:ok, %Req.Response{status: 200, body: body}} when is_binary(body) ->
+        # Req only auto-decodes JSON when it recognizes the response's
+        # Content-Type; `iapi.php` is a legacy, undocumented endpoint whose
+        # Content-Type behavior isn't guaranteed to stay JSON forever (see
+        # "Content-Type findings" in docs/windguru-api-notes.md). Decode
+        # explicitly here so a mislabeled/missing Content-Type doesn't turn
+        # every success into an error.
+        case Jason.decode(body) do
+          {:ok, decoded} -> {:ok, decoded}
+          {:error, _reason} -> {:error, :unexpected_format}
+        end
 
       {:ok, %Req.Response{status: 200}} ->
         {:error, :unexpected_format}

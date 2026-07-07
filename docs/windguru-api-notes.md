@@ -58,6 +58,30 @@ this document.
     will require further discovery (possibly only available for saved
     "spot" ids, not arbitrary lat/lon).
 
+## Content-Type findings (Task 5 fix round 1)
+
+Re-verified with header-only `curl -D -` probes (2 requests, ~11s apart,
+2026-07-07) against the two endpoints reachable without a cookie:
+
+- `q=station_list` (no headers) → `HTTP/2 401` (session cookie from a prior
+  capture had since been invalidated server-side; unrelated to this check),
+  `content-type: application/json; charset=utf-8`.
+- `q=station_data&id_station=4048` (fresh 60-min window, `avg_minutes=5`,
+  `User-Agent: $WG_UA` + `Referer: https://www.windguru.cz/`) →
+  `HTTP/2 200`, `content-type: application/json; charset=utf-8`.
+
+Both responses — including the error response — came back with a genuine
+JSON `Content-Type`, so `Req`'s auto-JSON-decode does fire in practice today.
+However, this was never verified before this adapter shipped, `iapi.php` is a
+legacy, undocumented PHP endpoint that could start sending `text/html` (or
+omit/mislabel the header) without notice, and the prior code's `is_map(body)
+or is_list(body)` guard depended entirely on that auto-decode happening. The
+adapter now decodes JSON bodies itself when Req hands back a raw binary,
+independent of the response's declared `Content-Type` (see
+`Stallalert.Windguru.HTTPAdapter.request/3`) — content-type sniffing/auto-
+decode is a `Req` convenience, not a guarantee, and shouldn't be
+this adapter's only path to a parsed body.
+
 ## Endpoint 1 — Spot forecast
 
 ```
