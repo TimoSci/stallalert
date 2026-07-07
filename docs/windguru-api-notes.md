@@ -352,3 +352,13 @@ redaction was necessary.
   cross-checked** against a second known-timezone location; treat as UTC
   per the header text, flag if forecast/actuals disagree with the JSON
   endpoints once both are wired up.
+
+## Open risk: session-cookie acquisition (added post-review)
+
+No automated login flow has been discovered or captured. `WG_COOKIE` is a fully opaque,
+manually-copy-pasted browser session string with unknown expiry and no documented renewal
+process. The custom lat/lon (PRO) forecast endpoint — the primary data source — depends
+entirely on it. The adapter task (Task 5) must either discover the login request
+(candidate: the request fired by windguru.cz's login form) or document manual cookie
+refresh as an operational requirement, with the micro API (credentials in URL, GFS only)
+as the no-cookie fallback.
