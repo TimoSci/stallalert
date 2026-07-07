@@ -7,19 +7,22 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
                    |> Jason.decode!()
   @reading "test/fixtures/windguru/station_current.json" |> File.read!() |> Jason.decode!()
   @stations "test/fixtures/windguru/stations_list.json" |> File.read!() |> Jason.decode!()
+  @micro_forecast "test/fixtures/windguru/micro_forecast.txt" |> File.read!()
 
   setup do
     HTTPAdapter.clear_station_cache()
-    original = System.get_env("WG_COOKIE")
-    System.delete_env("WG_COOKIE")
+
+    env_vars = ["WG_COOKIE", "WG_USERNAME", "WG_MICRO_PASSWORD"]
+    originals = Map.new(env_vars, &{&1, System.get_env(&1)})
+    Enum.each(env_vars, &System.delete_env/1)
 
     on_exit(fn ->
       HTTPAdapter.clear_station_cache()
 
-      case original do
-        nil -> System.delete_env("WG_COOKIE")
-        val -> System.put_env("WG_COOKIE", val)
-      end
+      Enum.each(originals, fn
+        {var, nil} -> System.delete_env(var)
+        {var, val} -> System.put_env(var, val)
+      end)
     end)
 
     :ok
@@ -89,44 +92,65 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
     assert_received {:headers, [_ua], [_referer]}
   end
 
-  test "windguru 500 becomes an error tuple" do
+  test "windguru 500 falls back to micro, which errors cleanly (not a crash) when unconfigured" do
+    # forecast/2 falls back to micro on any iapi error (see moduledoc); with
+    # WG_USERNAME/WG_MICRO_PASSWORD unset (this file's setup deletes both),
+    # the fallback short-circuits instead of crashing or hitting the network.
     Req.Test.stub(HTTPAdapter, fn conn -> Plug.Conn.send_resp(conn, 500, "boom") end)
-    assert {:error, {:http_status, 500}} = HTTPAdapter.forecast(52.36, 5.04)
+    assert {:error, :micro_not_configured} = HTTPAdapter.forecast(52.36, 5.04)
   end
 
-  test "non-JSON garbage becomes an error tuple, not a crash" do
+  test "non-JSON garbage falls back to micro, which errors cleanly (not a crash) when unconfigured" do
     Req.Test.stub(HTTPAdapter, fn conn -> Plug.Conn.send_resp(conn, 200, "<html>") end)
-    assert {:error, :unexpected_format} = HTTPAdapter.forecast(52.36, 5.04)
+    assert {:error, :micro_not_configured} = HTTPAdapter.forecast(52.36, 5.04)
   end
 
-  test "401 without WG_COOKIE set returns :auth_required" do
+  test "iapi 500 falls back to micro and succeeds when micro is reachable and configured" do
+    System.put_env("WG_USERNAME", "test-user")
+    System.put_env("WG_MICRO_PASSWORD", "test-pass")
+
+    Req.Test.stub(HTTPAdapter, fn conn ->
+      case conn.host do
+        "micro.windguru.cz" -> Plug.Conn.send_resp(conn, 200, @micro_forecast)
+        _ -> Plug.Conn.send_resp(conn, 500, "boom")
+      end
+    end)
+
+    assert {:ok, %{model: "gfs-micro"}} = HTTPAdapter.forecast(39.92, 3.09)
+  end
+
+  test "401 without WG_COOKIE set falls back to micro, which is unconfigured by default" do
+    # The iapi leg still hits :auth_required internally (see translate_auth_error),
+    # but forecast/2 now falls back to micro on *any* iapi error, so the final
+    # result here reflects the (unconfigured) micro fallback, not the iapi
+    # auth signal directly. See the moduledoc note on this tradeoff.
     System.delete_env("WG_COOKIE")
 
     Req.Test.stub(HTTPAdapter, fn conn ->
       Plug.Conn.send_resp(conn, 401, Jason.encode!(%{"return" => "error"}))
     end)
 
-    assert {:error, :auth_required} = HTTPAdapter.forecast(52.36, 5.04)
+    assert {:error, :micro_not_configured} = HTTPAdapter.forecast(52.36, 5.04)
   end
 
-  test "403 without WG_COOKIE set returns :auth_required" do
+  test "403 without WG_COOKIE set falls back to micro, which is unconfigured by default" do
     System.delete_env("WG_COOKIE")
 
     Req.Test.stub(HTTPAdapter, fn conn ->
       Plug.Conn.send_resp(conn, 403, Jason.encode!(%{"return" => "error"}))
     end)
 
-    assert {:error, :auth_required} = HTTPAdapter.forecast(52.36, 5.04)
+    assert {:error, :micro_not_configured} = HTTPAdapter.forecast(52.36, 5.04)
   end
 
-  test "401 with WG_COOKIE set returns :cookie_expired" do
+  test "401 with WG_COOKIE set falls back to micro, which is unconfigured by default" do
     System.put_env("WG_COOKIE", "langc=en; session=fake; login_md5=fake")
 
     Req.Test.stub(HTTPAdapter, fn conn ->
       Plug.Conn.send_resp(conn, 401, Jason.encode!(%{"return" => "error"}))
     end)
 
-    assert {:error, :cookie_expired} = HTTPAdapter.forecast(52.36, 5.04)
+    assert {:error, :micro_not_configured} = HTTPAdapter.forecast(52.36, 5.04)
   end
 
   test "forecast/2 sends the cookie header when WG_COOKIE is set" do

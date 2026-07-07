@@ -17,6 +17,13 @@ defmodule Stallalert.Windguru.HTTPAdapter do
       return 401). The raw payload is ~1.16 MB, so the parsed station list is
       cached in `:persistent_term` for 6 hours to avoid hammering Windguru on
       every station refresh.
+    * `forecast/2` falls back to the `micro.windguru.cz` plain-text API (see
+      `Stallalert.Windguru.MicroParser`) whenever the `iapi.php` request
+      errors (network failure, non-200, undecodable body, auth wall, ...) or
+      its body fails to parse into a forecast. The micro fallback requires
+      `WG_USERNAME`/`WG_MICRO_PASSWORD`; if either is unset/empty, the
+      fallback short-circuits to `{:error, :micro_not_configured}` instead of
+      attempting a request.
 
   Response bodies are decoded content-type-independently: `iapi.php` is a
   legacy, undocumented PHP endpoint, and while probing found it currently
@@ -43,15 +50,23 @@ defmodule Stallalert.Windguru.HTTPAdapter do
   This applies uniformly to all three endpoints for a consistent error
   contract, even though only `forecast/2` is known to actually require the
   cookie today.
+
+  Note: because `forecast/2` now falls back to the micro API on *any* iapi
+  error (see moduledoc above), `:auth_required`/`:cookie_expired` are only
+  the final return value of `forecast/2` when the micro fallback is also
+  unavailable or unconfigured — they remain accurate as "the iapi leg hit an
+  auth wall" signals in logs/traces even when the overall call still
+  succeeds via micro.
   """
 
   @behaviour Stallalert.Windguru.Adapter
 
-  alias Stallalert.Windguru.{ForecastParser, StationParser}
+  alias Stallalert.Windguru.{ForecastParser, MicroParser, StationParser}
   alias Stallalert.Geo
 
   @cz_base "https://www.windguru.cz/int/iapi.php"
   @net_base "https://www.windguru.net/int/iapi.php"
+  @micro_base "https://micro.windguru.cz/"
 
   @user_agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " <>
                 "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 StallAlert/1.0"
@@ -65,8 +80,11 @@ defmodule Stallalert.Windguru.HTTPAdapter do
 
     params = %{q: "forecast", id_model: 3, lat: lat, lon: lon}
 
-    with {:ok, body} <- get(@cz_base, params, headers) do
-      ForecastParser.parse(body)
+    with {:ok, body} <- get(@cz_base, params, headers),
+         {:ok, forecast} <- ForecastParser.parse(body) do
+      {:ok, forecast}
+    else
+      {:error, _reason} -> micro_forecast(lat, lon)
     end
   end
 
@@ -122,6 +140,54 @@ defmodule Stallalert.Windguru.HTTPAdapter do
          {:ok, stations} <- StationParser.parse_station_list(body) do
       :persistent_term.put(@station_cache_key, {System.system_time(:second), stations})
       {:ok, stations}
+    end
+  end
+
+  # `iapi.php` (JSON) failed or its body didn't parse into a forecast — try
+  # the plain-text `micro.windguru.cz` fallback before giving up entirely.
+  # Only `m=gfs` returns a real forecast table on the micro API (`m=wg`, a
+  # guessed WG-blend id, returns an empty table); see
+  # `docs/windguru-api-notes.md`.
+  defp micro_forecast(lat, lon) do
+    with {:ok, username} <- fetch_micro_env("WG_USERNAME"),
+         {:ok, password} <- fetch_micro_env("WG_MICRO_PASSWORD"),
+         {:ok, body} <- fetch_micro_body(lat, lon, username, password) do
+      MicroParser.parse(body)
+    end
+  end
+
+  defp fetch_micro_env(var) do
+    case System.get_env(var) do
+      nil -> {:error, :micro_not_configured}
+      "" -> {:error, :micro_not_configured}
+      value -> {:ok, value}
+    end
+  end
+
+  # Deliberately not routed through `request/3`: the micro API returns an
+  # HTML/text body, not JSON, so `request/3`'s JSON-decode-a-raw-binary path
+  # doesn't apply here — a 200 binary body is handed to `MicroParser` as-is.
+  defp fetch_micro_body(lat, lon, username, password) do
+    opts = Application.get_env(:stallalert, :windguru_req_options, [])
+    params = %{lat: lat, lon: lon, m: "gfs", u: username, p: password}
+
+    req =
+      Req.new(
+        [base_url: @micro_base, params: params, headers: base_headers(), retry: false] ++ opts
+      )
+
+    case Req.get(req) do
+      {:ok, %Req.Response{status: 200, body: body}} when is_binary(body) ->
+        {:ok, body}
+
+      {:ok, %Req.Response{status: 200}} ->
+        {:error, :unexpected_format}
+
+      {:ok, %Req.Response{status: status}} ->
+        {:error, {:http_status, status}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
