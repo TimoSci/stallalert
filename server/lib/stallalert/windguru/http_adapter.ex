@@ -13,9 +13,10 @@ defmodule Stallalert.Windguru.HTTPAdapter do
       No cookie is sent — the endpoint was found to work with just
       `User-Agent` + `Referer` for the tested (public) station.
     * `nearest_station/2` hits the global station list on `www.windguru.net`,
-      which needs no headers at all. The raw payload is ~1.16 MB, so the
-      parsed station list is cached in `:persistent_term` for 6 hours to
-      avoid hammering Windguru on every station refresh.
+      which requires `User-Agent` + `Referer` (as of 2026-07-07; bare requests
+      return 401). The raw payload is ~1.16 MB, so the parsed station list is
+      cached in `:persistent_term` for 6 hours to avoid hammering Windguru on
+      every station refresh.
 
   Response bodies are decoded content-type-independently: `iapi.php` is a
   legacy, undocumented PHP endpoint, and while probing found it currently
@@ -60,12 +61,7 @@ defmodule Stallalert.Windguru.HTTPAdapter do
 
   @impl true
   def forecast(lat, lon) do
-    headers =
-      [
-        {"user-agent", @user_agent},
-        {"referer", "https://www.windguru.cz/?lat=#{lat}&lon=#{lon}"}
-      ]
-      |> maybe_add_cookie()
+    headers = base_headers() |> maybe_add_cookie()
 
     params = %{q: "forecast", id_model: 3, lat: lat, lon: lon}
 
@@ -80,11 +76,9 @@ defmodule Stallalert.Windguru.HTTPAdapter do
     from = DateTime.add(now, -60 * 60, :second) |> DateTime.to_iso8601()
     to = DateTime.to_iso8601(now)
 
-    headers = [{"user-agent", @user_agent}, {"referer", "https://www.windguru.cz/"}]
-
     params = %{q: "station_data", id_station: id, from: from, to: to, avg_minutes: 5}
 
-    with {:ok, body} <- get(@cz_base, params, headers) do
+    with {:ok, body} <- get(@cz_base, params, base_headers()) do
       StationParser.parse_reading(body)
     end
   end
@@ -124,11 +118,15 @@ defmodule Stallalert.Windguru.HTTPAdapter do
   defp fetch_and_cache_station_list do
     params = %{q: "station_list", id_type: 0, seconds: 1800, seconds_alive: 172_800}
 
-    with {:ok, body} <- get(@net_base, params, []),
+    with {:ok, body} <- get(@net_base, params, base_headers()),
          {:ok, stations} <- StationParser.parse_station_list(body) do
       :persistent_term.put(@station_cache_key, {System.system_time(:second), stations})
       {:ok, stations}
     end
+  end
+
+  defp base_headers do
+    [{"user-agent", @user_agent}, {"referer", "https://www.windguru.cz/"}]
   end
 
   defp get(base_url, params, headers) do

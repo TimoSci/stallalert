@@ -270,10 +270,16 @@ GET https://www.windguru.net/int/iapi.php
     &seconds=1800
     &seconds_alive=172800
     &WGCACHEABLE=30
+Headers:
+  User-Agent: $WG_UA
+  Referer: https://www.windguru.cz/
 ```
 
-- **Minimal working recipe**: no headers at all. `200 OK` with zero
-  `User-Agent`/`Referer`/cookie/token.
+- **Minimal working recipe**: `User-Agent` + `Referer` headers required (as of
+  2026-07-07). Bare requests with no headers return `401 Unauthorized`. No
+  session cookie or token needed.
+  - 0 headers → `401 Unauthorized!`
+  - + `User-Agent` + `Referer` → `200 OK`, full body
 - `id_type=0` appears to mean "all station types". `seconds=1800` /
   `seconds_alive=172800` look like recency filters (last-reading-age and
   max-staleness windows in seconds) but weren't varied to confirm precisely.

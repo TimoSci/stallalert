@@ -75,6 +75,20 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
     refute_received :station_list_hit
   end
 
+  test "nearest_station/2 sends user-agent and referer headers on station_list request" do
+    test_pid = self()
+
+    Req.Test.stub(HTTPAdapter, fn conn ->
+      ua = Plug.Conn.get_req_header(conn, "user-agent")
+      referer = Plug.Conn.get_req_header(conn, "referer")
+      send(test_pid, {:headers, ua, referer})
+      Req.Test.json(conn, @stations)
+    end)
+
+    assert {:ok, _} = HTTPAdapter.nearest_station(52.36, 5.04)
+    assert_received {:headers, [_ua], [_referer]}
+  end
+
   test "windguru 500 becomes an error tuple" do
     Req.Test.stub(HTTPAdapter, fn conn -> Plug.Conn.send_resp(conn, 500, "boom") end)
     assert {:error, {:http_status, 500}} = HTTPAdapter.forecast(52.36, 5.04)
@@ -143,6 +157,20 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
     assert_received {:cookie_header, []}
   end
 
+  test "forecast/2 sends user-agent and referer headers" do
+    test_pid = self()
+
+    Req.Test.stub(HTTPAdapter, fn conn ->
+      ua = Plug.Conn.get_req_header(conn, "user-agent")
+      referer = Plug.Conn.get_req_header(conn, "referer")
+      send(test_pid, {:headers, ua, referer})
+      Req.Test.json(conn, @forecast_custom)
+    end)
+
+    assert {:ok, _} = HTTPAdapter.forecast(52.36, 5.04)
+    assert_received {:headers, [_ua], [_referer]}
+  end
+
   test "station_reading/1 does not send a cookie header even when WG_COOKIE is set" do
     System.put_env("WG_COOKIE", "langc=en; session=fake; login_md5=fake")
     test_pid = self()
@@ -155,6 +183,20 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
 
     assert {:ok, _} = HTTPAdapter.station_reading(1234)
     assert_received {:cookie_header, []}
+  end
+
+  test "station_reading/1 sends user-agent and referer headers" do
+    test_pid = self()
+
+    Req.Test.stub(HTTPAdapter, fn conn ->
+      ua = Plug.Conn.get_req_header(conn, "user-agent")
+      referer = Plug.Conn.get_req_header(conn, "referer")
+      send(test_pid, {:headers, ua, referer})
+      Req.Test.json(conn, @reading)
+    end)
+
+    assert {:ok, _} = HTTPAdapter.station_reading(1234)
+    assert_received {:headers, [_ua], [_referer]}
   end
 
   test "station 500 becomes an error tuple" do
