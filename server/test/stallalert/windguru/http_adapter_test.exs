@@ -1,5 +1,6 @@
 defmodule Stallalert.Windguru.HTTPAdapterTest do
   use ExUnit.Case, async: false
+  @moduletag :capture_log
   alias Stallalert.Windguru.HTTPAdapter
 
   @forecast_custom "test/fixtures/windguru/forecast_custom.json"
@@ -116,7 +117,12 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
       end
     end)
 
-    assert {:ok, %{model: "gfs-micro"}} = HTTPAdapter.forecast(39.92, 3.09)
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, %{model: "gfs-micro"}} = HTTPAdapter.forecast(39.92, 3.09)
+      end)
+
+    assert log =~ "micro fallback"
   end
 
   test "401 without WG_COOKIE set falls back to micro, which is unconfigured by default" do
@@ -226,6 +232,36 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
   test "station 500 becomes an error tuple" do
     Req.Test.stub(HTTPAdapter, fn conn -> Plug.Conn.send_resp(conn, 500, "boom") end)
     assert {:error, {:http_status, 500}} = HTTPAdapter.station_reading(1234)
+  end
+
+  test "station_reading maps 401 without cookie to auth_required" do
+    System.delete_env("WG_COOKIE")
+
+    Req.Test.stub(HTTPAdapter, fn conn ->
+      Plug.Conn.send_resp(conn, 401, Jason.encode!(%{"return" => "error"}))
+    end)
+
+    assert {:error, :auth_required} = HTTPAdapter.station_reading(1234)
+  end
+
+  test "station_reading maps 401 with cookie to cookie_expired" do
+    System.put_env("WG_COOKIE", "langc=en; session=fake; login_md5=fake")
+
+    Req.Test.stub(HTTPAdapter, fn conn ->
+      Plug.Conn.send_resp(conn, 401, Jason.encode!(%{"return" => "error"}))
+    end)
+
+    assert {:error, :cookie_expired} = HTTPAdapter.station_reading(1234)
+  end
+
+  test "station_reading maps 403 without cookie to auth_required" do
+    System.delete_env("WG_COOKIE")
+
+    Req.Test.stub(HTTPAdapter, fn conn ->
+      Plug.Conn.send_resp(conn, 403, Jason.encode!(%{"return" => "error"}))
+    end)
+
+    assert {:error, :auth_required} = HTTPAdapter.station_reading(1234)
   end
 
   test "station_list garbage becomes an error tuple, not a crash" do

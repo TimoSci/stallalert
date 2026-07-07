@@ -61,6 +61,8 @@ defmodule Stallalert.Windguru.HTTPAdapter do
 
   @behaviour Stallalert.Windguru.Adapter
 
+  require Logger
+
   alias Stallalert.Windguru.{ForecastParser, MicroParser, StationParser}
   alias Stallalert.Geo
 
@@ -84,7 +86,12 @@ defmodule Stallalert.Windguru.HTTPAdapter do
          {:ok, forecast} <- ForecastParser.parse(body) do
       {:ok, forecast}
     else
-      {:error, _reason} -> micro_forecast(lat, lon)
+      {:error, reason} ->
+        Logger.warning(
+          "windguru iapi forecast failed (#{inspect(reason)}); attempting micro fallback"
+        )
+
+        micro_forecast(lat, lon)
     end
   end
 
