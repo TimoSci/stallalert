@@ -180,7 +180,14 @@ defmodule Stallalert.Windguru.HTTPAdapter do
 
     req =
       Req.new(
-        [base_url: @micro_base, params: params, headers: base_headers(), retry: false] ++ opts
+        [
+          base_url: @micro_base,
+          params: params,
+          headers: base_headers(),
+          retry: false,
+          receive_timeout: 3_500,
+          connect_options: [timeout: 2_500]
+        ] ++ opts
       )
 
     case Req.get(req) do
@@ -212,7 +219,16 @@ defmodule Stallalert.Windguru.HTTPAdapter do
     opts = Application.get_env(:stallalert, :windguru_req_options, [])
 
     req =
-      Req.new([base_url: base_url, params: params, headers: headers, retry: false] ++ opts)
+      Req.new(
+        [
+          base_url: base_url,
+          params: params,
+          headers: headers,
+          retry: false,
+          receive_timeout: 3_500,
+          connect_options: [timeout: 2_500]
+        ] ++ opts
+      )
 
     case Req.get(req) do
       {:ok, %Req.Response{status: 200, body: body}} when is_map(body) or is_list(body) ->

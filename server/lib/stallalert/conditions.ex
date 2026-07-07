@@ -16,7 +16,11 @@ defmodule Stallalert.Conditions do
     GenServer.start_link(__MODULE__, opts, if(name, do: [name: name], else: []))
   end
 
-  def get(server \\ __MODULE__, lat, lon), do: GenServer.call(server, {:get, lat, lon}, 15_000)
+  # Worst-case sequential chain on a cache miss: forecast iapi (fail-slow)
+  # + micro fallback, then station list + station reading -- 4 legs, each
+  # bounded by http_adapter.ex's Req timeouts (connect 2.5s + receive 3.5s
+  # = 6s per leg) => 4 * 6s = 24s < 30s.
+  def get(server \\ __MODULE__, lat, lon), do: GenServer.call(server, {:get, lat, lon}, 30_000)
 
   # Server
 
