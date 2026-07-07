@@ -8,6 +8,11 @@ defmodule Stallalert.Conditions do
   @forecast_ttl_ms 15 * 60 * 1000
   @station_ttl_ms 5 * 60 * 1000
   @grace_ms 10 * 60 * 1000
+  # A cached entry is treated as expired (and re-fetched) if the rider has
+  # moved more than this many km since it was fetched, even if its TTL
+  # hasn't elapsed -- otherwise a request for a new position within TTL
+  # would silently serve the old position's forecast/station as `stale: false`.
+  @move_invalidate_km 2.0
 
   # Client
 
@@ -70,16 +75,16 @@ defmodule Stallalert.Conditions do
   defp reschedule(%{refresh?: true}), do: Process.send_after(self(), :refresh, @station_ttl_ms)
   defp reschedule(_), do: :ok
 
-  defp maybe_refresh(%{pos: {lat, lon}} = state, now) do
+  defp maybe_refresh(%{pos: {lat, lon} = pos} = state, now) do
     adapter = Application.fetch_env!(:stallalert, :windguru_adapter)
 
     forecast =
-      refresh_entry(state.forecast, state.forecast_ttl_ms, now, fn ->
+      refresh_entry(state.forecast, state.forecast_ttl_ms, now, pos, fn ->
         adapter.forecast(lat, lon)
       end)
 
     station =
-      refresh_entry(state.station, state.station_ttl_ms, now, fn ->
+      refresh_entry(state.station, state.station_ttl_ms, now, pos, fn ->
         case adapter.nearest_station(lat, lon) do
           {:ok, nil} ->
             {:ok, nil}
@@ -98,15 +103,17 @@ defmodule Stallalert.Conditions do
     %{state | forecast: forecast, station: station}
   end
 
-  # entry: %{data: term, fetched_at: ms} | nil
-  defp refresh_entry(entry, ttl, now, fetch_fun) do
-    fresh? = entry != nil and now - entry.fetched_at < ttl
+  # entry: %{data: term, fetched_at: ms, pos: {lat, lon}} | nil
+  defp refresh_entry(entry, ttl, now, pos, fetch_fun) do
+    fresh? =
+      entry != nil and now - entry.fetched_at < ttl and
+        Stallalert.Geo.distance_km(entry.pos, pos) <= @move_invalidate_km
 
     if fresh? do
       entry
     else
       case fetch_fun.() do
-        {:ok, data} -> %{data: data, fetched_at: now}
+        {:ok, data} -> %{data: data, fetched_at: now, pos: pos}
         {:error, _} -> entry
       end
     end

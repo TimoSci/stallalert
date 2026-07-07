@@ -78,6 +78,28 @@ defmodule Stallalert.ConditionsTest do
     assert c.forecast.model == "wg"
   end
 
+  test "moving > 2km within TTL invalidates the cache and re-resolves", %{pid: pid} do
+    assert {:ok, c} = Conditions.get(pid, 52.36, 5.04)
+    assert c.station.name == "TestStn"
+
+    FakeAdapter.set(:nearest_station, {:ok, %{id: 2, name: "OtherStn", distance_km: 0.8}})
+
+    # ~0.05 deg lat ~= 5.5 km away (0.01 deg lat ~= 1.11 km), well within TTL.
+    assert {:ok, c} = Conditions.get(pid, 52.36 + 0.05, 5.04)
+    assert c.station.name == "OtherStn"
+  end
+
+  test "moving < 2km within TTL keeps serving the cached position's data", %{pid: pid} do
+    assert {:ok, c} = Conditions.get(pid, 52.36, 5.04)
+    assert c.station.name == "TestStn"
+
+    FakeAdapter.set(:nearest_station, {:ok, %{id: 2, name: "OtherStn", distance_km: 0.8}})
+
+    # ~0.005 deg lat ~= 0.55 km away, under the 2km invalidation threshold.
+    assert {:ok, c} = Conditions.get(pid, 52.36 + 0.005, 5.04)
+    assert c.station.name == "TestStn"
+  end
+
   test "serves stale: true when only the station reading is past its ttl+grace" do
     pid =
       start_supervised!(
