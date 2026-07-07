@@ -353,12 +353,65 @@ redaction was necessary.
   per the header text, flag if forecast/actuals disagree with the JSON
   endpoints once both are wired up.
 
-## Open risk: session-cookie acquisition (added post-review)
+## Open risk: session-cookie acquisition (resolved, Task 5 — "no" outcome)
 
-No automated login flow has been discovered or captured. `WG_COOKIE` is a fully opaque,
-manually-copy-pasted browser session string with unknown expiry and no documented renewal
+**No automated login flow was found.** `WG_COOKIE` remains a fully opaque, manually
+-copy-pasted browser session string with unknown expiry and no discovered renewal
 process. The custom lat/lon (PRO) forecast endpoint — the primary data source — depends
-entirely on it. The adapter task (Task 5) must either discover the login request
-(candidate: the request fired by windguru.cz's login form) or document manual cookie
-refresh as an operational requirement, with the micro API (credentials in URL, GFS only)
-as the no-cookie fallback.
+entirely on it. This is a documented, accepted operational limitation, not an oversight:
+the adapter (`Stallalert.Windguru.HTTPAdapter`) reads `WG_COOKIE` from the environment on
+every call and maps 401/403 to `{:error, :auth_required}` (cookie absent) or
+`{:error, :cookie_expired}` (cookie present but rejected) so callers/operators can tell
+the two failure modes apart. `WG_COOKIE` must be refreshed manually from a logged-in
+browser session when it expires (see `docs/deploy.md`).
+
+### Probe log (Task 5, ~11 requests, 2.5-3s spacing, budget ~12)
+
+All probes below used credentials sourced from the git-ignored `server/.env.local`
+(`WG_USERNAME`/`WG_PASSWORD`), never printed or logged. No captcha, lockout, or
+account-warning signal was observed at any point — probing stopped because the budget
+was reached and every avenue plausibly worth trying inside it had been exhausted, not
+because of a stop signal.
+
+1. `GET https://www.windguru.cz/` (homepage, with a browser `User-Agent`) → `200`.
+   Inspected the HTML for a login form/action: no `<form>` for login exists in the
+   static markup. The only login affordance is `<a href="javascript:WG.user.loginWindow();">`
+   — a client-side JS modal, not a plain HTML form with a discoverable `action=`.
+   A `data-guide-src="login.php"` attribute turned out to be for an unrelated onboarding
+   "tour guide" overlay, not a real endpoint.
+2. `GET https://www.windguru.net/wg/js/dist/709/main-wg.js` → `200`. Grepped the bundle
+   for `iapi` / `login` substrings: zero matches (this bundle is a thin loader).
+3. `GET https://www.windguru.net/wg/js/prod/libs-wg.<hash>.js` → `200` (294 KB). Grepped
+   for `iapi` / `*login*` substrings: zero matches — the login flow's JS isn't in this
+   bundle either (likely a lazy-loaded chunk not reachable via static grep within budget).
+4. `POST https://www.windguru.cz/int/iapi.php` with body `q=user_login&login=...&password=...`
+   → `400 {"return":"error","message":"Missing query"}`.
+5. `POST .../iapi.php` with body `q=login&username=...&password=...` → `400 "Missing query"`.
+6. `POST .../iapi.php` with body `q=user_login&username=...&password=...` → `400 "Missing query"`.
+7. `POST .../iapi.php?q=user_login` (q in the URL query string instead, `login`/`password`
+   in the POST body) → `400 "Missing query"`.
+8. `POST .../iapi.php?q=user_login` (q in URL, `username`/`password` in body) →
+   `400 "Missing query"`.
+9. `GET https://www.windguru.cz/int/iapi.php?q=user_login` (no credentials, just to see
+   whether `q` was even recognized outside a POST) → `401 {"return":"error","message":"Not enough permission"}`.
+10. `GET .../iapi.php?q=totallybogus12345` (a deliberately invalid `q`, for comparison) →
+    also `401 "Not enough permission"` — identical to #9. This shows `q=user_login` isn't
+    being specially recognized as a login endpoint via GET either; unrecognized/gated `q`
+    values just fall through to a generic permission error.
+11. `POST .../iapi.php?q=user_login` with a JSON body (`Content-Type: application/json`,
+    `{"login":...,"password":...}`) instead of form-encoding → `400 "Missing query"` again.
+
+**Conclusion**: every POST to `iapi.php` (any `q`, any field-name guess, any body
+encoding) returned the same generic `400 "Missing query"`, while GET requests reached
+the query dispatcher fine (`401 "Not enough permission"` for both a login-shaped `q`
+and a nonsense one). This is consistent with `iapi.php` only accepting GET for query
+dispatch — the real login mechanism is client-side JS (`WG.user.loginWindow()`) calling
+some endpoint not found in the two JS bundles fetched within budget, or requiring
+request shaping (headers, CSRF token, XHR-specific markers) not reproduced by plain
+curl. No working login flow was found; no captcha/lockout was triggered.
+
+**Recommendation for future work**: if automated cookie refresh becomes worth pursuing,
+the next step is capturing the actual login XHR from a real browser session (Task 1's
+capture method) rather than guessing field names blind — the JS-driven login modal
+almost certainly posts to a specific, non-obvious endpoint/shape that black-box guessing
+under a small budget didn't surface.
