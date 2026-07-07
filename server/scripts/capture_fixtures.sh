@@ -45,7 +45,8 @@
 #     Referer for the tested station -- no token, no cookie needed. This
 #     may vary for stations not owned/visible to the account; if you get a
 #     401, add -H "X-WG-Token: $WG_TOKEN" and/or -b "$WG_COOKIE".
-#   - Station list (q=station_list): worked with NO headers at all.
+#   - Station list (q=station_list): requires User-Agent + Referer (as of
+#     2026-07-07; bare requests return 401 -- see docs/windguru-api-notes.md).
 #   - rundef: safe to omit entirely -- server always serves the latest
 #     model run. A stale/explicit rundef value was also silently ignored
 #     in favor of the latest run (Windguru does not error on stale rundef).
@@ -128,6 +129,8 @@ sleep_between
 echo "4/5 station list..."
 RAW_STATIONS="$(mktemp)"
 curl -sf \
+  -H "Referer: https://www.windguru.cz/" \
+  -H "User-Agent: $WG_UA" \
   "https://www.windguru.net/int/iapi.php?q=station_list&id_type=0&seconds=1800&seconds_alive=172800&WGCACHEABLE=30" \
   > "$RAW_STATIONS"
 
