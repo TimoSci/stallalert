@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "StallAlertKit",
-    platforms: [.watchOS(.v11), .macOS(.v14)],
+    platforms: [.watchOS(.v10), .macOS(.v14)],
     products: [.library(name: "StallAlertKit", targets: ["StallAlertKit"])],
     targets: [
         .target(name: "StallAlertKit"),

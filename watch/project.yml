@@ -2,7 +2,7 @@ name: StallAlert
 options:
   bundleIdPrefix: net.timosci
   deploymentTarget:
-    watchOS: "11.0"
+    watchOS: "10.0"
 packages:
   StallAlertKit:
     path: StallAlertKit
