@@ -8,6 +8,8 @@ defmodule Stallalert.FakeAdapter do
     :persistent_term.erase({__MODULE__, :forecast})
     :persistent_term.erase({__MODULE__, :nearest_station})
     :persistent_term.erase({__MODULE__, :station_reading})
+    :persistent_term.erase({__MODULE__, :stations_near})
+    :persistent_term.erase({__MODULE__, :station_by_id})
     :ok
   end
 
@@ -47,4 +49,27 @@ defmodule Stallalert.FakeAdapter do
       {:ok, %{time: ~U[2026-07-06 09:55:00Z], wind_kn: 15.5, gust_kn: 20.1, dir_deg: 230.0}}
     )
   end
+
+  @impl true
+  def stations_near(_lat, _lon, _limit) do
+    get_resp(
+      :stations_near,
+      {:ok,
+       [
+         %{id: 1, name: "TestStn", distance_km: 1.2},
+         %{id: 2, name: "OtherBeach", distance_km: 4.7}
+       ]}
+    )
+  end
+
+  @impl true
+  def station_by_id(id, _lat, _lon) do
+    get_resp(:station_by_id, default_station_by_id(id))
+  end
+
+  defp default_station_by_id(id) when id in [1, 2, 77] do
+    {:ok, %{id: id, name: "Chosen", distance_km: 3.3}}
+  end
+
+  defp default_station_by_id(_id), do: {:ok, nil}
 end

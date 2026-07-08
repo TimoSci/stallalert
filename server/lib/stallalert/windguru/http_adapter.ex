@@ -76,6 +76,14 @@ defmodule Stallalert.Windguru.HTTPAdapter do
   @station_cache_key {__MODULE__, :station_list_cache}
   @station_cache_ttl_seconds 6 * 60 * 60
 
+  # `stations_near/3` candidate radius: mirrors `Geo`'s own 30 km
+  # "representative" bound, offering a few nearby override choices.
+  # `station_by_id/3` allows a wider 50 km leash for an explicit user
+  # override — a user may reasonably know a station a bit farther out is
+  # still representative, even if it wouldn't be auto-selected as "nearest".
+  @candidate_radius_km 30.0
+  @override_max_km 50.0
+
   @impl true
   def forecast(lat, lon) do
     headers = base_headers() |> maybe_add_cookie()
@@ -116,6 +124,40 @@ defmodule Stallalert.Windguru.HTTPAdapter do
         {s, d} -> {:ok, %{id: s.id, name: s.name, distance_km: Float.round(d, 1)}}
       end
     end
+  end
+
+  @impl true
+  def stations_near(lat, lon, limit) do
+    with {:ok, stations} <- fetch_station_list() do
+      {:ok,
+       stations
+       |> Enum.map(&with_distance(&1, lat, lon))
+       |> Enum.filter(&(&1.distance_km <= @candidate_radius_km))
+       |> Enum.sort_by(& &1.distance_km)
+       |> Enum.take(limit)}
+    end
+  end
+
+  @impl true
+  def station_by_id(id, lat, lon) do
+    with {:ok, stations} <- fetch_station_list() do
+      case Enum.find(stations, &(&1.id == id)) do
+        nil ->
+          {:ok, nil}
+
+        s ->
+          candidate = with_distance(s, lat, lon)
+          if candidate.distance_km <= @override_max_km, do: {:ok, candidate}, else: {:ok, nil}
+      end
+    end
+  end
+
+  defp with_distance(%{id: id, name: name, lat: s_lat, lon: s_lon}, lat, lon) do
+    %{
+      id: id,
+      name: name,
+      distance_km: Geo.distance_km({s_lat, s_lon}, {lat, lon}) |> Float.round(1)
+    }
   end
 
   @doc false

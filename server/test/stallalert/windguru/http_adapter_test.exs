@@ -29,6 +29,10 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
     :ok
   end
 
+  defp stub_station_list_fixture do
+    Req.Test.stub(HTTPAdapter, fn conn -> Req.Test.json(conn, @stations) end)
+  end
+
   test "forecast/2 fetches and normalizes the custom lat/lon payload" do
     Req.Test.stub(HTTPAdapter, fn conn -> Req.Test.json(conn, @forecast_custom) end)
     assert {:ok, %{model: "GFS 13 km", hours: [_ | _]}} = HTTPAdapter.forecast(52.36, 5.04)
@@ -52,7 +56,7 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
   end
 
   test "nearest_station/2 resolves nearest from the list endpoint" do
-    Req.Test.stub(HTTPAdapter, fn conn -> Req.Test.json(conn, @stations) end)
+    stub_station_list_fixture()
     assert {:ok, result} = HTTPAdapter.nearest_station(52.36, 5.04)
 
     case result do
@@ -267,5 +271,50 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
   test "station_list garbage becomes an error tuple, not a crash" do
     Req.Test.stub(HTTPAdapter, fn conn -> Plug.Conn.send_resp(conn, 200, "<html>") end)
     assert {:error, :unexpected_format} = HTTPAdapter.nearest_station(52.36, 5.04)
+  end
+
+  describe "stations_near/3" do
+    test "returns nearest-first candidates within 30 km, capped at limit" do
+      stub_station_list_fixture()
+      assert {:ok, stations} = HTTPAdapter.stations_near(39.92, 3.09, 6)
+      assert length(stations) >= 1 and length(stations) <= 6
+      assert [%{id: _, name: _, distance_km: _} | _] = stations
+      distances = Enum.map(stations, & &1.distance_km)
+      assert distances == Enum.sort(distances)
+      assert Enum.all?(distances, &(&1 <= 30.0))
+      # Station 4048 "KiteandYoga Mallorca" (lat 39.858276, lon 3.101116) is
+      # the only fixture entry within 30 km of 39.92/3.09 (~6.9 km away); all
+      # other Balearic entries are Menorca (~80 km+) or >30 km on Mallorca.
+      assert hd(stations).id == 4048
+    end
+
+    test "empty when nothing within 30 km" do
+      stub_station_list_fixture()
+      assert {:ok, []} = HTTPAdapter.stations_near(0.0, 0.0, 6)
+    end
+  end
+
+  describe "station_by_id/3" do
+    test "returns the station with distance when known and within 50 km" do
+      stub_station_list_fixture()
+
+      assert {:ok, %{id: 4048, name: name, distance_km: d}} =
+               HTTPAdapter.station_by_id(4048, 39.92, 3.09)
+
+      assert is_binary(name) and d < 50.0
+    end
+
+    test "nil for unknown id" do
+      stub_station_list_fixture()
+      assert {:ok, nil} = HTTPAdapter.station_by_id(999_999_999, 39.92, 3.09)
+    end
+
+    test "nil for a known id farther than 50 km" do
+      stub_station_list_fixture()
+      # Station 2367 "Lomas del Cauquen" (lat -41.169515, lon -71.370423,
+      # Argentina) is thousands of km from Mallorca — well past the 50 km
+      # override bound.
+      assert {:ok, nil} = HTTPAdapter.station_by_id(2367, 39.92, 3.09)
+    end
   end
 end
