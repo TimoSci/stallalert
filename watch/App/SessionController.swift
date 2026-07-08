@@ -48,7 +48,12 @@ final class SessionController: NSObject {
         locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
         locationManager.startUpdatingLocation()
 
-        await startWorkout()
+        // Workout session failure aborts the session because it's what guarantees background runtime for alerts;
+        // the error stays visible on the start screen (the refresh loop, which clears lastError, never starts).
+        guard await startWorkout() else {
+            locationManager.stopUpdatingLocation()
+            return
+        }
         WKInterfaceDevice.current().enableWaterLock()
         phase = .running
         startRefreshLoop()
@@ -66,17 +71,17 @@ final class SessionController: NSObject {
         if case .alerting = phase { phase = .running }
     }
 
-    private func startWorkout() async {
+    private func startWorkout() async -> Bool {
         guard HKHealthStore.isHealthDataAvailable() else {
             lastError = "Health data unavailable"
-            return
+            return false
         }
         do {
             try await healthStore.requestAuthorization(
                 toShare: [HKObjectType.workoutType()], read: [])
         } catch {
             lastError = "Health authorization failed: \(error.localizedDescription)"
-            return
+            return false
         }
 
         let config = HKWorkoutConfiguration()
@@ -86,8 +91,10 @@ final class SessionController: NSObject {
             let session = try HKWorkoutSession(healthStore: healthStore, configuration: config)
             session.startActivity(with: Date())
             workoutSession = session
+            return true
         } catch {
             lastError = "Workout session failed: \(error.localizedDescription)"
+            return false
         }
     }
 
