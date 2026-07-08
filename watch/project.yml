@@ -1,0 +1,28 @@
+name: StallAlert
+options:
+  bundleIdPrefix: net.timosci
+  deploymentTarget:
+    watchOS: "11.0"
+packages:
+  StallAlertKit:
+    path: StallAlertKit
+targets:
+  StallAlert:
+    type: application
+    platform: watchOS
+    sources: [App]
+    dependencies:
+      - package: StallAlertKit
+    settings:
+      base:
+        SWIFT_VERSION: 6.0
+        INFOPLIST_KEY_WKApplication: true
+        INFOPLIST_KEY_WKWatchOnly: true
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "Your position selects the forecast point and nearest wind station."
+        INFOPLIST_KEY_NSHealthShareUsageDescription: "Workout session keeps wind monitoring running while you ride."
+        INFOPLIST_KEY_NSHealthUpdateUsageDescription: "Saves your kitesurfing session as a workout."
+        GENERATE_INFOPLIST_FILE: true
+    entitlements:
+      path: App/StallAlert.entitlements
+      properties:
+        com.apple.developer.healthkit: true
