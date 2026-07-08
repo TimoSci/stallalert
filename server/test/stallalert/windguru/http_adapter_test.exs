@@ -317,4 +317,109 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
       assert {:ok, nil} = HTTPAdapter.station_by_id(2367, 39.92, 3.09)
     end
   end
+
+  describe "sort/cap/boundary behavior with synthetic station list" do
+    # Use ~0.01° lat ≈ 1.112 km to create synthetic stations at known distances
+    # Entry helper: creates a station map at a given lat offset from (0.0, 0.0)
+    defp entry(id, name, lat) do
+      %{
+        "id_station" => id,
+        "name" => name,
+        "lat" => lat,
+        "lon" => 0.0,
+        "spotname" => name,
+        "uid" => "test_#{id}",
+        "id_type" => 0,
+        "id_spot" => id,
+        "wg" => 1,
+        "alt" => 0,
+        "timezone" => "UTC",
+        "seconds_alive" => 100,
+        "weather" => %{}
+      }
+    end
+
+    test "Geo.distance_km validates ~30.03 km entry is actually > 30.0 unrounded" do
+      # Verify the test's distance assumption: lat 0.2701 ≈ ~30.03 km
+      query_point = {0.0, 0.0}
+      station_point = {0.2701, 0.0}
+      actual_distance = Stallalert.Geo.distance_km(station_point, query_point)
+      assert actual_distance > 30.0
+    end
+
+    test "stations_near(0.0, 0.0, 6) returns exactly [12, 11, 13] in distance order (pins sort and round-after-compare)" do
+      HTTPAdapter.clear_station_cache()
+
+      synthetic_list = [
+        # ~5.6 km
+        entry(11, "Station A", 0.05),
+        # ~2.2 km
+        entry(12, "Station B", 0.02),
+        # ~16.7 km
+        entry(13, "Station C", 0.15),
+        # ~30.03 km (must be EXCLUDED)
+        entry(14, "Station D", 0.2701),
+        # ~100 km (excluded)
+        entry(15, "Station E", 0.9)
+      ]
+
+      Req.Test.stub(HTTPAdapter, fn conn -> Req.Test.json(conn, synthetic_list) end)
+
+      assert {:ok, stations} = HTTPAdapter.stations_near(0.0, 0.0, 6)
+      ids = Enum.map(stations, & &1.id)
+      assert ids == [12, 11, 13], "Expected [12, 11, 13] but got #{inspect(ids)}"
+      # Verify distances are sorted ascending
+      distances = Enum.map(stations, & &1.distance_km)
+      assert distances == Enum.sort(distances)
+      # Verify all are within 30 km
+      assert Enum.all?(distances, &(&1 <= 30.0))
+    end
+
+    test "stations_near(0.0, 0.0, 2) caps at limit (kills take-off-by-one mutant)" do
+      HTTPAdapter.clear_station_cache()
+
+      synthetic_list = [
+        entry(11, "Station A", 0.05),
+        entry(12, "Station B", 0.02),
+        entry(13, "Station C", 0.15)
+      ]
+
+      Req.Test.stub(HTTPAdapter, fn conn -> Req.Test.json(conn, synthetic_list) end)
+
+      assert {:ok, stations} = HTTPAdapter.stations_near(0.0, 0.0, 2)
+      ids = Enum.map(stations, & &1.id)
+      assert ids == [12, 11], "Expected exactly 2 stations but got #{inspect(ids)}"
+    end
+
+    test "station_by_id(14, 0.0, 0.0) returns station at ~30.03 km (within 50 km bound)" do
+      HTTPAdapter.clear_station_cache()
+
+      # ~30.03 km (within 50 km)
+      synthetic_list = [
+        entry(14, "Station D", 0.2701)
+      ]
+
+      Req.Test.stub(HTTPAdapter, fn conn -> Req.Test.json(conn, synthetic_list) end)
+
+      assert {:ok, %{id: 14, name: name, distance_km: d}} =
+               HTTPAdapter.station_by_id(14, 0.0, 0.0)
+
+      assert is_binary(name)
+      # Rounded to 1 decimal place
+      assert d == 30.0
+    end
+
+    test "station_by_id(16, 0.0, 0.0) returns nil for station at ~50.03 km (beyond 50 km bound)" do
+      HTTPAdapter.clear_station_cache()
+
+      # ~50.03 km (beyond 50 km override limit)
+      synthetic_list = [
+        entry(16, "Station F", 0.4501)
+      ]
+
+      Req.Test.stub(HTTPAdapter, fn conn -> Req.Test.json(conn, synthetic_list) end)
+
+      assert {:ok, nil} = HTTPAdapter.station_by_id(16, 0.0, 0.0)
+    end
+  end
 end

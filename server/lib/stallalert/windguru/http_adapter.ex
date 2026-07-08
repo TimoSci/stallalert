@@ -131,9 +131,10 @@ defmodule Stallalert.Windguru.HTTPAdapter do
     with {:ok, stations} <- fetch_station_list() do
       {:ok,
        stations
-       |> Enum.map(&with_distance(&1, lat, lon))
-       |> Enum.filter(&(&1.distance_km <= @candidate_radius_km))
-       |> Enum.sort_by(& &1.distance_km)
+       |> Enum.map(&compute_distance(&1, lat, lon))
+       |> Enum.filter(&(&1.unrounded <= @candidate_radius_km))
+       |> Enum.sort_by(& &1.unrounded)
+       |> Enum.map(&format_station/1)
        |> Enum.take(limit)}
     end
   end
@@ -146,17 +147,32 @@ defmodule Stallalert.Windguru.HTTPAdapter do
           {:ok, nil}
 
         s ->
-          candidate = with_distance(s, lat, lon)
-          if candidate.distance_km <= @override_max_km, do: {:ok, candidate}, else: {:ok, nil}
+          distance_record = compute_distance(s, lat, lon)
+
+          if distance_record.unrounded <= @override_max_km,
+            do: {:ok, format_station(distance_record)},
+            else: {:ok, nil}
       end
     end
   end
 
-  defp with_distance(%{id: id, name: name, lat: s_lat, lon: s_lon}, lat, lon) do
+  # Compute distance without rounding (for filtering/comparison).
+  defp compute_distance(%{id: id, name: name, lat: s_lat, lon: s_lon}, lat, lon) do
+    unrounded = Geo.distance_km({s_lat, s_lon}, {lat, lon})
+
     %{
       id: id,
       name: name,
-      distance_km: Geo.distance_km({s_lat, s_lon}, {lat, lon}) |> Float.round(1)
+      unrounded: unrounded
+    }
+  end
+
+  # Format a distance record with rounding applied.
+  defp format_station(%{id: id, name: name, unrounded: unrounded}) do
+    %{
+      id: id,
+      name: name,
+      distance_km: Float.round(unrounded, 1)
     }
   end
 
