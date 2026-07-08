@@ -115,4 +115,45 @@ defmodule Stallalert.ConditionsTest do
     assert c.stale == true
     assert c.station.name == "TestStn"
   end
+
+  test "override station_id is honored and marked manual", %{pid: pid} do
+    assert {:ok, c} = Conditions.get(pid, 52.36, 5.04, station_id: 77)
+    assert c.station.id == 77
+    assert c.station.source == "manual"
+  end
+
+  test "unknown override falls back to auto-nearest", %{pid: pid} do
+    Stallalert.FakeAdapter.set(:station_by_id, {:ok, nil})
+    assert {:ok, c} = Conditions.get(pid, 52.36, 5.04, station_id: 424_242)
+    assert c.station.name == "TestStn"
+    assert c.station.source == "auto"
+  end
+
+  test "no override is auto", %{pid: pid} do
+    assert {:ok, c} = Conditions.get(pid, 52.36, 5.04)
+    assert c.station.source == "auto"
+  end
+
+  test "switching override invalidates the cached station entry immediately", %{pid: pid} do
+    assert {:ok, c1} = Conditions.get(pid, 52.36, 5.04, station_id: 1)
+    assert c1.station.id == 1
+    # within TTL, different target -> must refetch, not serve cached station 1
+    assert {:ok, c2} = Conditions.get(pid, 52.36, 5.04, station_id: 2)
+    assert c2.station.id == 2
+    # and back to auto also switches (nearest is id 1 per FakeAdapter default)
+    assert {:ok, c3} = Conditions.get(pid, 52.36, 5.04)
+    assert c3.station.id == 1
+    assert c3.station.source == "auto"
+  end
+
+  test "payload always carries nearby_stations", %{pid: pid} do
+    assert {:ok, c} = Conditions.get(pid, 52.36, 5.04)
+    assert [%{id: _, name: _, distance_km: _} | _] = c.nearby_stations
+  end
+
+  test "nearby_stations degrades to empty list on adapter error", %{pid: pid} do
+    Stallalert.FakeAdapter.set(:stations_near, {:error, :boom})
+    assert {:ok, c} = Conditions.get(pid, 52.36, 5.04)
+    assert c.nearby_stations == []
+  end
 end

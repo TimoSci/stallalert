@@ -2,6 +2,19 @@ defmodule Stallalert.Conditions do
   @moduledoc """
   Caches normalized windguru data for the last requested position and
   refreshes it in the background (forecast 15 min, station 5 min).
+
+  The station leg supports an optional per-request `:station_id` override
+  (see `get/4`). When given and the adapter resolves it to a real station,
+  that station's reading is served with `source: "manual"`; otherwise (no
+  override, or an unknown/out-of-range id) the nearest station is served
+  with `source: "auto"`. Switching between overrides (or between an
+  override and auto) invalidates the cached station entry immediately,
+  even if it is otherwise within its TTL and the rider hasn't moved.
+
+  The background `:refresh` tick re-fetches for the last *requested*
+  position AND the last requested `station_id`, so an active override
+  keeps being honored by background refreshes rather than silently
+  reverting to auto between client polls.
   """
   use GenServer
 
@@ -25,7 +38,12 @@ defmodule Stallalert.Conditions do
   # + micro fallback, then station list + station reading -- 4 legs, each
   # bounded by http_adapter.ex's Req timeouts (connect 2.5s + receive 3.5s
   # = 6s per leg) => 4 * 6s = 24s < 30s.
-  def get(server \\ __MODULE__, lat, lon), do: GenServer.call(server, {:get, lat, lon}, 30_000)
+  #
+  # `opts[:station_id]`, when present, requests that specific station
+  # instead of the nearest one -- see the moduledoc for override semantics.
+  def get(server \\ __MODULE__, lat, lon, opts \\ []) do
+    GenServer.call(server, {:get, lat, lon, opts[:station_id]}, 30_000)
+  end
 
   # Server
 
@@ -40,6 +58,7 @@ defmodule Stallalert.Conditions do
     {:ok,
      %{
        pos: nil,
+       station_id: nil,
        forecast: nil,
        station: nil,
        refresh?: refresh?,
@@ -50,11 +69,18 @@ defmodule Stallalert.Conditions do
   end
 
   @impl true
-  def handle_call({:get, lat, lon}, _from, state) do
-    state = %{state | pos: {lat, lon}}
+  def handle_call({:get, lat, lon, station_id}, _from, state) do
+    adapter = Application.fetch_env!(:stallalert, :windguru_adapter)
+    state = %{state | pos: {lat, lon}, station_id: station_id}
     state = maybe_refresh(state, now_ms())
 
-    case build_payload(state) do
+    nearby =
+      case adapter.stations_near(lat, lon, 6) do
+        {:ok, list} -> list
+        {:error, _} -> []
+      end
+
+    case build_payload(state, nearby) do
       nil -> {:reply, {:error, :no_data}, state}
       payload -> {:reply, {:ok, payload}, state}
     end
@@ -75,7 +101,7 @@ defmodule Stallalert.Conditions do
   defp reschedule(%{refresh?: true}), do: Process.send_after(self(), :refresh, @station_ttl_ms)
   defp reschedule(_), do: :ok
 
-  defp maybe_refresh(%{pos: {lat, lon} = pos} = state, now) do
+  defp maybe_refresh(%{pos: {lat, lon} = pos, station_id: station_id} = state, now) do
     adapter = Application.fetch_env!(:stallalert, :windguru_adapter)
 
     forecast =
@@ -84,21 +110,7 @@ defmodule Stallalert.Conditions do
       end)
 
     station =
-      refresh_entry(state.station, state.station_ttl_ms, now, pos, fn ->
-        case adapter.nearest_station(lat, lon) do
-          {:ok, nil} ->
-            {:ok, nil}
-
-          {:ok, info} ->
-            case adapter.station_reading(info.id) do
-              {:ok, reading} -> {:ok, Map.put(info, :reading, reading)}
-              {:error, _} = e -> e
-            end
-
-          {:error, _} = e ->
-            e
-        end
-      end)
+      refresh_station_entry(state.station, state.station_ttl_ms, now, pos, station_id, adapter)
 
     %{state | forecast: forecast, station: station}
   end
@@ -119,9 +131,72 @@ defmodule Stallalert.Conditions do
     end
   end
 
-  defp build_payload(%{forecast: nil}), do: nil
+  # station entry: %{data: term, fetched_at: ms, pos: {lat, lon},
+  #                   target_id: integer | nil, source: "auto" | "manual"} | nil
+  #
+  # The requested target is cheap to know without contacting the adapter:
+  # it's either the given station_id (manual) or the :auto sentinel. We
+  # compare that against the entry's own recorded target (its id when it
+  # was fetched manually, or :auto otherwise) *before* the usual TTL/move
+  # freshness check -- mirroring the >2km move-invalidation pattern, a
+  # mismatch (an override was added, changed, or dropped since the entry
+  # was fetched) expires the entry immediately, forcing a real adapter
+  # call to resolve the new target. On adapter error while resolving,
+  # the existing entry is kept -- same philosophy as any other fetch
+  # failure: never drop last-good data.
+  defp refresh_station_entry(entry, ttl, now, pos, station_id, adapter) do
+    requested_key = station_id || :auto
+    entry_key = entry && if entry.source == "manual", do: entry.target_id, else: :auto
 
-  defp build_payload(state) do
+    fresh? =
+      entry != nil and requested_key == entry_key and
+        now - entry.fetched_at < ttl and
+        Stallalert.Geo.distance_km(entry.pos, pos) <= @move_invalidate_km
+
+    if fresh? do
+      entry
+    else
+      {lat, lon} = pos
+
+      case fetch_station(adapter, lat, lon, station_id) do
+        {:ok, target_id, source, data} ->
+          %{data: data, fetched_at: now, pos: pos, target_id: target_id, source: source}
+
+        {:error, _} ->
+          entry
+      end
+    end
+  end
+
+  defp fetch_station(adapter, lat, lon, nil), do: fetch_auto_station(adapter, lat, lon)
+
+  defp fetch_station(adapter, lat, lon, station_id) do
+    case adapter.station_by_id(station_id, lat, lon) do
+      # Unknown/out-of-range override: fall back to auto-nearest.
+      {:ok, nil} -> fetch_auto_station(adapter, lat, lon)
+      {:ok, info} -> with_reading(adapter, info, "manual")
+      {:error, _} = error -> error
+    end
+  end
+
+  defp fetch_auto_station(adapter, lat, lon) do
+    case adapter.nearest_station(lat, lon) do
+      {:ok, nil} -> {:ok, nil, "auto", nil}
+      {:ok, info} -> with_reading(adapter, info, "auto")
+      {:error, _} = error -> error
+    end
+  end
+
+  defp with_reading(adapter, info, source) do
+    case adapter.station_reading(info.id) do
+      {:ok, reading} -> {:ok, info.id, source, Map.put(info, :reading, reading)}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp build_payload(%{forecast: nil}, _nearby), do: nil
+
+  defp build_payload(state, nearby) do
     now = now_ms()
 
     forecast_stale? =
@@ -131,11 +206,16 @@ defmodule Stallalert.Conditions do
       state.station != nil and state.station.data != nil and
         now - state.station.fetched_at > state.station_ttl_ms + state.grace_ms
 
+    station =
+      state.station && state.station.data &&
+        Map.put(state.station.data, :source, state.station.source)
+
     %{
       generated_at: DateTime.utc_now(),
       stale: forecast_stale? or station_stale?,
       forecast: state.forecast.data,
-      station: state.station && state.station.data
+      station: station,
+      nearby_stations: nearby
     }
   end
 
