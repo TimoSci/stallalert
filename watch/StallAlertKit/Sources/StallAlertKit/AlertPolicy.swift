@@ -19,6 +19,16 @@ public struct AlertPolicy: Sendable {
 
     public init(thresholdKn: Double) { self.thresholdKn = thresholdKn }
 
+    /// Evaluates the current wind conditions and returns an alert cause if applicable.
+    ///
+    /// Re-arm evaluates only currently-available values. If a low live reading goes stale after an alert fires,
+    /// the policy may re-arm on forecast alone — this is deliberate. Re-arming only re-enables future alerts;
+    /// the rider was already warned by the fired event. Refusing to re-arm without fresh live data would let
+    /// a dead station suppress all later alerts indefinitely.
+    ///
+    /// A live reading with nil `liveAgeSeconds` is treated as infinitely stale and excluded from both firing
+    /// and re-arming logic. Unknown-age data is untrustworthy in both directions; callers are expected to
+    /// always supply age information.
     public mutating func evaluate(_ input: Input) -> Cause? {
         let live: Double? = (input.liveAgeSeconds ?? .infinity) <= maxLiveAge ? input.liveKn : nil
         let values = [live, input.forecastMinKn].compactMap { $0 }

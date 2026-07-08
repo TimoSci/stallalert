@@ -48,4 +48,47 @@ final class AlertPolicyTests: XCTestCase {
         XCTAssertNil(p.evaluate(input(forecast: nil))) // silence persists through data gaps
         XCTAssertNil(p.evaluate(input(forecast: 11)))
     }
+
+    func testRearmRequiresAllChannelsAboveHysteresis() {
+        var p = AlertPolicy(thresholdKn: 12)
+        // Fire on forecast 11 (below threshold)
+        XCTAssertEqual(p.evaluate(input(forecast: 11, live: 15)), .predicted)
+        // live 14, forecast 13: not all above 14, so still silenced
+        XCTAssertNil(p.evaluate(input(forecast: 13, live: 14)))
+        // drop forecast to 11, live still 14: still not re-armed
+        XCTAssertNil(p.evaluate(input(forecast: 11, live: 14)))
+        // both 14: re-arm silently
+        XCTAssertNil(p.evaluate(input(forecast: 14, live: 14)))
+        // now forecast drops below, re-fire
+        XCTAssertEqual(p.evaluate(input(forecast: 11, live: 15)), .predicted)
+    }
+
+    func testExactBoundaryValues() {
+        var p = AlertPolicy(thresholdKn: 12)
+        // live exactly 12.0 doesn't fire (strict <)
+        XCTAssertNil(p.evaluate(input(forecast: 15, live: 12.0)))
+        // forecast exactly 12.0 with no live doesn't fire
+        XCTAssertNil(p.evaluate(input(forecast: 12.0)))
+        // forecast 11 fires
+        XCTAssertEqual(p.evaluate(input(forecast: 11)), .predicted)
+        // forecast 14.0 re-arms silently (inclusive >=)
+        XCTAssertNil(p.evaluate(input(forecast: 14.0)))
+        // forecast 11 fires again
+        XCTAssertEqual(p.evaluate(input(forecast: 11)), .predicted)
+    }
+
+    func testLiveReadingWithoutAgeIsExcluded() {
+        var p = AlertPolicy(thresholdKn: 12)
+        // live 5 with unknown age is excluded; forecast 15 is fine -> no fire
+        let inputUnknownAge = AlertPolicy.Input(forecastMinKn: 15, liveKn: 5, liveAgeSeconds: nil)
+        XCTAssertNil(p.evaluate(inputUnknownAge))
+    }
+
+    func testSilencedByPredictedStaysSilentWhenMeasuredAlsoDrops() {
+        var p = AlertPolicy(thresholdKn: 12)
+        // Fire on forecast 11
+        XCTAssertEqual(p.evaluate(input(forecast: 11)), .predicted)
+        // measured drops to 9, but already silenced -> no second fire
+        XCTAssertNil(p.evaluate(input(forecast: 11, live: 9)))
+    }
 }
