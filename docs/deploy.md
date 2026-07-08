@@ -1,8 +1,33 @@
 # Deploying the StallAlert server
 
+## Current production deployment (as of 2026-07-08)
+
+- Host: OVH box `51.255.64.127` (`ns3024870.ip-51-255-64.eu`), Ubuntu 22.04,
+  SSH user `stallalert`, repo cloned at `~/stallalert`.
+- Docker: **snap** package (`snap list docker`). Two snap quirks: the
+  `docker` group had to be created manually (`addgroup --system docker` +
+  `adduser stallalert docker` + `snap disable docker && snap enable docker`
+  for the socket group to apply), and snap auto-refreshes restart the daemon
+  at arbitrary times — `--restart unless-stopped` covers the containers.
+- DNS: root A record `stallalert.com` -> `51.255.64.127` (Namecheap).
+- Caddy: a pre-existing **custom** install owned by the `evomelodia` user —
+  unit `/etc/systemd/system/caddy.service`, binary
+  `/home/evomelodia/.local/bin/caddy`, config
+  `/home/evomelodia/caddy/Caddyfile` (NOT `/etc/caddy/Caddyfile`). The
+  `stallalert.com` reverse-proxy block was appended there; certificates live
+  under `/home/evomelodia/.local/share/caddy`. Reload with
+  `sudo systemctl reload caddy`; validate with
+  `sudo -u evomelodia /home/evomelodia/.local/bin/caddy validate --config /home/evomelodia/caddy/Caddyfile`.
+- Env: `~/stallalert-deploy.env` on the server (chmod 600), scp'd from the
+  workstation's git-ignored `server/.env.deploy`. That file holds the live
+  `API_TOKEN` (the watch app needs the same one) — it is a plain
+  `KEY=value`-per-line file for `docker --env-file`; do NOT `source` it in a
+  shell (the unquoted `WG_COOKIE` breaks shell parsing).
+
 ## Prerequisites
 - A host with a fixed IP, Docker, and ports 80/443 open.
-- A DNS A record: `stallalert.<yourdomain>` -> `<fixed IP>`.
+- A DNS A record pointing your chosen hostname at the fixed IP (this
+  deployment uses the root domain `stallalert.com`).
 
 ## Build the image
 ```bash
@@ -14,11 +39,11 @@ docker build -t stallalert-server .
 ```bash
 docker run -d --restart unless-stopped --name stallalert \
   -p 127.0.0.1:4000:4000 \
-  -e API_TOKEN="$(openssl rand -hex 32)" \
-  -e WG_USERNAME=... -e WG_PASSWORD=... -e WG_MICRO_PASSWORD=... \
-  -e WG_COOKIE="..." \
+  --env-file ~/stallalert-deploy.env \
   stallalert-server
 ```
+The env file contains `API_TOKEN`, `WG_USERNAME`, `WG_PASSWORD`,
+`WG_MICRO_PASSWORD`, `WG_COOKIE`, one unquoted `KEY=value` per line.
 Record the `API_TOKEN` — the watch app needs it. The server binds only to
 `127.0.0.1:4000` on the host; it is not reachable from outside until Caddy
 proxies to it (see below).
@@ -50,28 +75,28 @@ for the server to boot; the release fails fast at startup with a clear
 error if `API_TOKEN` is missing.
 
 ## TLS via Caddy (automatic Let's Encrypt)
-`/etc/caddy/Caddyfile`:
+Append to the Caddyfile (on this host: `/home/evomelodia/caddy/Caddyfile`;
+on a fresh host with packaged Caddy: `/etc/caddy/Caddyfile`):
 ```
-stallalert.<yourdomain> {
+stallalert.com {
     reverse_proxy 127.0.0.1:4000
 }
 ```
 Then:
 ```bash
-systemctl reload caddy
+sudo systemctl reload caddy
 ```
-
-> The Caddy/DNS/TLS steps above are standard configuration and have not
-> been exercised as part of this task (no live domain or Caddy instance was
-> available) — verify them against your own host before relying on them.
+Caddy fetches the Let's Encrypt certificate automatically within ~30 s of
+the reload (verified live 2026-07-08; cert issued for stallalert.com).
 
 ## Verify from outside
 ```bash
-curl https://stallalert.<yourdomain>/v1/health
+curl https://stallalert.com/v1/health
 # -> {"status":"ok"}
 
 curl -H "Authorization: Bearer $API_TOKEN" \
-  "https://stallalert.<yourdomain>/v1/conditions?lat=52.36&lon=5.04"
+  "https://stallalert.com/v1/conditions?lat=39.92&lon=3.09"
+# -> 200 with forecast + nearest station (verified live 2026-07-08)
 ```
 
 ## Updating (e.g. after a Windguru format change)
