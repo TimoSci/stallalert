@@ -156,4 +156,26 @@ defmodule Stallalert.ConditionsTest do
     assert {:ok, c} = Conditions.get(pid, 52.36, 5.04)
     assert c.nearby_stations == []
   end
+
+  test "repeated identical rejected override is cache-stable within TTL", %{pid: pid} do
+    Stallalert.FakeAdapter.set(:station_by_id, {:ok, nil})
+    assert {:ok, c1} = Conditions.get(pid, 52.36, 5.04, station_id: 424_242)
+    assert c1.station.source == "auto"
+    assert c1.station.reading.wind_kn == 15.5
+    # change what a REFETCH would return; a cache-stable repeat must NOT see it
+    Stallalert.FakeAdapter.set(
+      :station_reading,
+      {:ok, %{time: ~U[2026-07-08 12:00:00Z], wind_kn: 99.9, gust_kn: 99.9, dir_deg: 1.0}}
+    )
+
+    assert {:ok, c2} = Conditions.get(pid, 52.36, 5.04, station_id: 424_242)
+    # cached — would be 99.9 if thrashing
+    assert c2.station.reading.wind_kn == 15.5
+    # control: switching to a VALID override must refetch and see the new value
+    # reset station_by_id to allow 77 to resolve
+    :persistent_term.erase({Stallalert.FakeAdapter, :station_by_id})
+    assert {:ok, c3} = Conditions.get(pid, 52.36, 5.04, station_id: 77)
+    assert c3.station.id == 77
+    assert c3.station.reading.wind_kn == 99.9
+  end
 end

@@ -132,24 +132,26 @@ defmodule Stallalert.Conditions do
   end
 
   # station entry: %{data: term, fetched_at: ms, pos: {lat, lon},
-  #                   target_id: integer | nil, source: "auto" | "manual"} | nil
+  #                   target_id: integer | nil, source: "auto" | "manual",
+  #                   requested: integer | :auto} | nil
   #
-  # The requested target is cheap to know without contacting the adapter:
-  # it's either the given station_id (manual) or the :auto sentinel. We
-  # compare that against the entry's own recorded target (its id when it
-  # was fetched manually, or :auto otherwise) *before* the usual TTL/move
-  # freshness check -- mirroring the >2km move-invalidation pattern, a
-  # mismatch (an override was added, changed, or dropped since the entry
-  # was fetched) expires the entry immediately, forcing a real adapter
-  # call to resolve the new target. On adapter error while resolving,
-  # the existing entry is kept -- same philosophy as any other fetch
-  # failure: never drop last-good data.
+  # When a station entry is fetched, we record the verbatim request descriptor
+  # (`station_id || :auto`) in the `requested` field. This ensures that identical
+  # requests (including rejected overrides that fall back to auto) remain
+  # cache-stable within TTL, while any change of request descriptor invalidates
+  # the entry immediately. For example: a rejected override (unknown station id)
+  # falls back to auto with `source: "auto"`, but we record the original
+  # (rejected) station_id in `requested`, so a repeated identical request matches
+  # and serves the cached data without re-fetching; switching to a different
+  # override or dropping the override altogether causes a mismatch in `requested`
+  # and forces a refresh. On adapter error while resolving, the existing entry
+  # is kept -- same philosophy as any other fetch failure: never drop last-good
+  # data.
   defp refresh_station_entry(entry, ttl, now, pos, station_id, adapter) do
     requested_key = station_id || :auto
-    entry_key = entry && if entry.source == "manual", do: entry.target_id, else: :auto
 
     fresh? =
-      entry != nil and requested_key == entry_key and
+      entry != nil and requested_key == entry.requested and
         now - entry.fetched_at < ttl and
         Stallalert.Geo.distance_km(entry.pos, pos) <= @move_invalidate_km
 
@@ -160,7 +162,14 @@ defmodule Stallalert.Conditions do
 
       case fetch_station(adapter, lat, lon, station_id) do
         {:ok, target_id, source, data} ->
-          %{data: data, fetched_at: now, pos: pos, target_id: target_id, source: source}
+          %{
+            data: data,
+            fetched_at: now,
+            pos: pos,
+            target_id: target_id,
+            source: source,
+            requested: requested_key
+          }
 
         {:error, _} ->
           entry
