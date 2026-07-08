@@ -12,29 +12,37 @@ import StallAlertKit
 ///   STALLALERT_WG_USERNAME        Windguru username
 ///   STALLALERT_WG_MICRO_PASSWORD  Windguru secondary (micro/API) password
 ///
-/// Variables that are absent or empty leave the stored value untouched, so
-/// this never wipes existing configuration. The scheme lives inside the
-/// git-ignored .xcodeproj and is wiped by `xcodegen generate`, so pasted
-/// secrets never reach version control.
+/// Keys AND values are whitespace-trimmed before matching/storing — pasted
+/// scheme entries routinely pick up stray leading/trailing spaces, which
+/// otherwise fail silently. Absent or empty(-after-trim) variables leave the
+/// stored value untouched, so this never wipes existing configuration. The
+/// scheme lives inside the git-ignored .xcodeproj and is wiped by
+/// `xcodegen generate`, so pasted secrets never reach version control.
 enum CredentialSeeder {
     static func seedFromLaunchEnvironmentIfPresent() {
         #if DEBUG
-        let env = ProcessInfo.processInfo.environment
         let secrets = KeychainStore()
         var settings = Settings.load(defaults: .standard, secrets: secrets)
         var touched = false
 
-        if let raw = env["STALLALERT_SERVICE_URL"], let url = URL(string: raw), url.host != nil {
-            settings.serviceURL = url
-            touched = true
-        }
-        for (variable, key) in [
-            ("STALLALERT_SERVICE_TOKEN", Settings.serviceTokenKey),
-            ("STALLALERT_WG_USERNAME", Settings.wgUsernameKey),
-            ("STALLALERT_WG_MICRO_PASSWORD", Settings.wgMicroPasswordKey),
-        ] {
-            if let value = env[variable], !value.isEmpty {
-                secrets.set(key, value)
+        let secretKeys: [String: String] = [
+            "STALLALERT_SERVICE_TOKEN": Settings.serviceTokenKey,
+            "STALLALERT_WG_USERNAME": Settings.wgUsernameKey,
+            "STALLALERT_WG_MICRO_PASSWORD": Settings.wgMicroPasswordKey,
+        ]
+
+        for (rawKey, rawValue) in ProcessInfo.processInfo.environment {
+            let key = rawKey.trimmingCharacters(in: .whitespaces)
+            let value = rawValue.trimmingCharacters(in: .whitespaces)
+            guard !value.isEmpty else { continue }
+
+            if key == "STALLALERT_SERVICE_URL" {
+                if let url = URL(string: value), url.host != nil {
+                    settings.serviceURL = url
+                    touched = true
+                }
+            } else if let secretKey = secretKeys[key] {
+                secrets.set(secretKey, value)
                 touched = true
             }
         }
