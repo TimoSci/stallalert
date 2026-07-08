@@ -6,7 +6,8 @@ final class AlertPresenter {
     private var task: Task<Void, Never>?
     private var player: AVAudioPlayer?
 
-    // 3 rounds over ~30 s: each round = strong haptics burst + alarm tone.
+    // 3 rounds over ~21 s: each round = strong haptics burst + alarm tone,
+    // separated by 8 s gaps (1.6 s haptics x 3 + 8 s x 2 gaps ~= 20.8 s).
     func fire() {
         stop()
         task = Task {

@@ -21,7 +21,11 @@ public final class ServiceClient: WindDataProvider, HealthCheckable {
         do { (data, resp) = try await session.data(for: req) }
         catch { throw ProviderError.transport }
 
-        switch (resp as! HTTPURLResponse).statusCode {
+        guard let http = resp as? HTTPURLResponse else {
+            throw ProviderError.transport
+        }
+
+        switch http.statusCode {
         case 200:
             guard let c = try? Conditions.decoder().decode(Conditions.self, from: data) else {
                 throw ProviderError.badPayload
