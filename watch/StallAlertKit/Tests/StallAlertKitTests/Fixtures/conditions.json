@@ -1,0 +1,17 @@
+{
+  "generated_at": "2026-07-06T10:00:00Z",
+  "stale": false,
+  "forecast": {
+    "model": "GFS 13 km",
+    "init_time": "2026-07-06T06:00:00Z",
+    "hours": [
+      {"time": "2026-07-06T10:00:00Z", "wind_kn": 14.0, "gust_kn": 21.0, "dir_deg": 225.0},
+      {"time": "2026-07-06T11:00:00Z", "wind_kn": 11.0, "gust_kn": 17.0, "dir_deg": 220.0},
+      {"time": "2026-07-06T12:00:00Z", "wind_kn": 9.0, "gust_kn": 14.0, "dir_deg": 215.0}
+    ]
+  },
+  "station": {
+    "id": 1234, "name": "Ijburg", "distance_km": 1.2,
+    "reading": {"time": "2026-07-06T09:55:00Z", "wind_kn": 15.5, "gust_kn": 20.1, "dir_deg": 230.0}
+  }
+}
