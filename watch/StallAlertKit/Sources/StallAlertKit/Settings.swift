@@ -39,6 +39,9 @@ public final class KeychainStore: SecretStore {
         SecItemDelete(attrs as CFDictionary)
         var add = attrs
         add[kSecValueData as String] = Data(value.utf8)
+        // Readable on-wrist/background after first unlock; never migrates to
+        // another device via backup or watch restore.
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         SecItemAdd(add as CFDictionary, nil)
     }
 }
