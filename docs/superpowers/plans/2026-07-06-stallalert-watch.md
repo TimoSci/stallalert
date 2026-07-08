@@ -17,6 +17,16 @@
 > readings (Task 5, rewritten). The `model` field is opaque display text
 > (server serves "GFS 13 km" or "gfs-micro", never "wg"). The fallback
 > credential is the Windguru *secondary/micro* password, not the main one.
+>
+> **Deliberate scope changes vs the spec, ledgered post-implementation
+> (2026-07-08):** threshold is adjusted via a Stepper in Settings (not
+> Digital-Crown-bound on the start screen); no pre-session forecast preview
+> (the data provider only exists during a session); offline retry is the
+> fixed 5-min tick plus a 10 s fast-retry until first data (not exponential
+> backoff); alarm pattern runs ~21 s, not the spec's "~30 s". Post-review
+> hardening beyond the plan text: fatal-on-workout-failure session start,
+> session-state clearing on end, offline cached-forecast alert evaluation,
+> radius-based direct forecast cache, per-source auth error messages.
 
 ## Global Constraints
 

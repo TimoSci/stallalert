@@ -55,6 +55,15 @@ review and verify specific decisions.
       app shows "Check service token" and does NOT switch to direct;
       restore the token afterwards.
 
+- [ ] (review) Fully offline: enable airplane mode (or walk out of LTE
+      coverage) mid-session → last-good data stays visible with honest ages
+      and the "offline" badge; then set the threshold above the cached
+      forecast's minimum → a PREDICTED alert still fires from cache within
+      one tick. This is the direct verification of the offline-safety fix.
+- [ ] (review) Time-to-first-data: after Start Session, the session screen
+      populates within ~30 s (short retry cadence until first fix+fetch),
+      not after a silent 5-minute wait.
+
 ## The alert (do this one on a calm day or with a raised threshold)
 - [ ] Set threshold ABOVE current wind → within one tick the alert fires:
       strong haptics + audible tone repeating (~3 rounds), full-screen red
@@ -64,6 +73,10 @@ review and verify specific decisions.
 - [ ] Raise wind expectation (set threshold 2+ kn below current wind), wait
       one tick (re-arm), then set it above again → alert fires a second
       time (hysteresis re-arm works end to end).
+- [ ] (review) Acknowledge under Water Lock: fire the alert while Water
+      Lock is engaged → confirm you can actually silence it with wet hands
+      (Water Lock blocks touch until crown-unlock; if silencing is too
+      fiddly on the water, note it — we may need a crown-based acknowledge).
 
 ## Endurance
 - [ ] 3-hour session (workout + GPS + LTE + 5-min ticks) ends with ≥ 25%
