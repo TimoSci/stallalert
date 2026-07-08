@@ -172,7 +172,7 @@ public final class DirectWindguruClient: WindDataProvider, @unchecked Sendable {
     }
 
     private static func parseStationEntry(_ dict: [String: Any]) -> StationEntry? {
-        guard let id = (dict["id_station"] as? NSNumber)?.intValue,
+        guard let id = dict["id_station"] as? Int,
               let lat = (dict["lat"] as? NSNumber)?.doubleValue,
               let lon = (dict["lon"] as? NSNumber)?.doubleValue else {
             return nil

@@ -192,4 +192,38 @@ final class DirectWindguruClientTests: XCTestCase {
         XCTAssertEqual(conditions.forecast.hours.count, 179)
         XCTAssertNil(conditions.station)
     }
+
+    // MARK: - 7. Degradation + fallback behavior
+
+    func testStationListWithNoParseableEntriesDegradesToNilStation() async throws {
+        let unparseable = """
+        [
+          {"foo": "bar"},
+          {"baz": 1}
+        ]
+        """
+        StubURLProtocol.handler = defaultHandler(stationListOverride: Data(unparseable.utf8))
+
+        // The station list contains no parseable entries. The parseStationList
+        // throws badPayload (no stations found in non-empty input), which is caught
+        // in fetchStationOrNil and degraded to nil, but the forecast succeeds.
+        let conditions = try await client().fetch(lat: 39.92, lon: 3.09)
+        XCTAssertEqual(conditions.forecast.hours.count, 179)
+        XCTAssertNil(conditions.station)
+    }
+
+    func testStationNameFallsBackToSpotname() async throws {
+        let stationWithSpotname = """
+        [
+          {"id_station": 9999, "name": "", "spotname": "Fallback Spot",
+           "lat": 39.93, "lon": 3.10}
+        ]
+        """
+        StubURLProtocol.handler = defaultHandler(stationListOverride: Data(stationWithSpotname.utf8))
+
+        let conditions = try await client().fetch(lat: 39.92, lon: 3.09)
+        let station = try XCTUnwrap(conditions.station)
+        XCTAssertEqual(station.name, "Fallback Spot")
+        XCTAssertEqual(station.id, 9999)
+    }
 }
