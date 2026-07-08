@@ -3,7 +3,14 @@ import StallAlertKit
 
 @main
 struct StallAlertApp: App {
-    @State private var session = SessionController()
+    @State private var session: SessionController
+
+    init() {
+        // Must run before SessionController loads Settings, so a freshly
+        // seeded service URL is visible on the very first launch.
+        CredentialSeeder.seedFromLaunchEnvironmentIfPresent()
+        _session = State(initialValue: SessionController())
+    }
 
     var body: some Scene {
         WindowGroup {
