@@ -8,7 +8,15 @@
 
 **Tech Stack:** Swift 6 (language mode 5 acceptable), SwiftUI, watchOS 11+, HealthKit, CoreLocation, AVFoundation, XcodeGen. No third-party dependencies.
 
-**Depends on:** the server plan (`2026-07-06-stallalert-server.md`) — its `/v1/conditions` API contract and the fixtures in `server/test/fixtures/windguru/`.
+**Depends on:** the server, now DEPLOYED and verified at `https://stallalert.com` (see docs/deploy.md); its `/v1/conditions` contract; and the REAL captured fixtures in `server/test/fixtures/windguru/`.
+
+> **REVISED 2026-07-08** after empirical API discovery and server deployment:
+> the direct-fallback client can NOT use iapi's custom lat/lon forecast (it
+> requires a browser session cookie with no programmatic login). The fallback
+> uses the micro API for forecasts + iapi's public station endpoints for live
+> readings (Task 5, rewritten). The `model` field is opaque display text
+> (server serves "GFS 13 km" or "gfs-micro", never "wg"). The fallback
+> credential is the Windguru *secondary/micro* password, not the main one.
 
 ## Global Constraints
 
@@ -16,6 +24,8 @@
 - Service timeout **5 s**; direct-fallback fetch cadence: forecast ≤ every 15 min, station ≤ every 5 min; combined refresh tick every **5 min**.
 - Package `StallAlertKit` platforms: `.watchOS(.v11), .macOS(.v14)` so `swift test` runs on the Mac.
 - JSON from the server: snake_case keys, ISO-8601 dates → `JSONDecoder` with `.convertFromSnakeCase` + `.iso8601`.
+- `Forecast.model` is OPAQUE display text (e.g. "GFS 13 km", "gfs-micro") — never branch on it except the one documented case: `"gfs-micro"` from the service means degraded-but-valid data.
+- Production service URL: `https://stallalert.com` (token in the git-ignored `server/.env.deploy`); direct fallback talks to `micro.windguru.cz` (forecast; credentials as query params) and iapi station endpoints (public but require browser-like User-Agent + Referer headers — bare requests get 401).
 - Trend classification: base-wind change over the next hour > +1 kn = rising, < −1 kn = dropping, else steady.
 - Directory: `watch/` containing `StallAlertKit/` (SPM package) and `App/` sources + `project.yml`.
 - Never render stale/failed data as fresh — every payload carries its source and age to the UI.
@@ -102,7 +112,7 @@ let package = Package(
   "generated_at": "2026-07-06T10:00:00Z",
   "stale": false,
   "forecast": {
-    "model": "wg",
+    "model": "GFS 13 km",
     "init_time": "2026-07-06T06:00:00Z",
     "hours": [
       {"time": "2026-07-06T10:00:00Z", "wind_kn": 14.0, "gust_kn": 21.0, "dir_deg": 225.0},
@@ -128,7 +138,7 @@ final class ModelsTests: XCTestCase {
         let data = try Data(contentsOf: url)
         let c = try Conditions.decoder().decode(Conditions.self, from: data)
         XCTAssertFalse(c.stale)
-        XCTAssertEqual(c.forecast.model, "wg")
+        XCTAssertEqual(c.forecast.model, "GFS 13 km")
         XCTAssertEqual(c.forecast.hours.count, 3)
         XCTAssertEqual(c.forecast.hours[0].windKn, 14.0)
         XCTAssertEqual(c.station?.name, "Ijburg")
@@ -138,7 +148,7 @@ final class ModelsTests: XCTestCase {
     func testStationIsOptional() throws {
         let json = """
         {"generated_at":"2026-07-06T10:00:00Z","stale":true,
-         "forecast":{"model":"wg","init_time":"2026-07-06T06:00:00Z","hours":[]},
+         "forecast":{"model":"gfs-micro","init_time":"2026-07-06T06:00:00Z","hours":[]},
          "station":null}
         """.data(using: .utf8)!
         let c = try Conditions.decoder().decode(Conditions.self, from: json)
@@ -478,6 +488,7 @@ public enum ProviderError: Error, Equatable {
     case serverError(Int)     // 5xx
     case badPayload            // 200 but undecodable
     case transport             // URLError, timeout
+    case notConfigured         // direct-fallback credentials absent (Task 5)
 }
 public final class ServiceClient: WindDataProvider, HealthCheckable {
     public init(baseURL: URL, token: String, session: URLSession)
@@ -582,7 +593,7 @@ public protocol HealthCheckable: Sendable {
     func isHealthy() async -> Bool
 }
 public enum ProviderError: Error, Equatable {
-    case unauthorized, serverError(Int), badPayload, transport
+    case unauthorized, serverError(Int), badPayload, transport, notConfigured
 }
 ```
 
@@ -642,207 +653,101 @@ git commit -m "feat(watch): service client with typed provider errors and health
 
 ---
 
-### Task 5: DirectWindguruClient (fallback provider)
+### Task 5: DirectWindguruClient (micro-API fallback provider) — REVISED 2026-07-08
+
+The original design called iapi's custom lat/lon forecast directly; discovery proved that endpoint requires a full browser session cookie with no programmatic login, so the watch cannot use it. The direct fallback instead uses:
+- **Forecast:** the PRO micro API — `GET https://micro.windguru.cz/?lat=<lat>&lon=<lon>&u=<username>&p=<microPassword>&m=gfs` returns an HTML page whose first `<pre>` block is a text forecast table. No cookies or special headers needed.
+- **Live station:** iapi's public station endpoints — `q=station_list` (windguru.net, global list) and `q=station_data` (windguru.cz, windowed samples). No cookie, but browser-like `User-Agent` + `Referer: https://www.windguru.cz/` headers are REQUIRED (bare requests 401).
+
+The **normative reference implementations** are the reviewed server modules — mirror their parsing and semantics in Swift: `server/lib/stallalert/windguru/micro_parser.ex` (forecast text parsing, month/year rollover, ≥3-step minimum), `server/lib/stallalert/windguru/station_parser.ex` (windowed samples: equal-length parallel arrays or error; skip nil-valued samples; pick max-unixtime sample) and `server/lib/stallalert/windguru/http_adapter.ex` (headers, station-list caching, error mapping). Also read `docs/windguru-api-notes.md` (endpoint/param/schema truth).
 
 **Files:**
+- Create: `watch/StallAlertKit/Sources/StallAlertKit/MicroForecastParser.swift`
 - Create: `watch/StallAlertKit/Sources/StallAlertKit/DirectWindguruClient.swift`
+- Test: `watch/StallAlertKit/Tests/StallAlertKitTests/MicroForecastParserTests.swift`
 - Test: `watch/StallAlertKit/Tests/StallAlertKitTests/DirectWindguruClientTests.swift`
-- Test fixtures: copy `server/test/fixtures/windguru/*.json` → `watch/StallAlertKit/Tests/StallAlertKitTests/Fixtures/windguru/`
+- Test fixtures: copy the REAL captured fixtures `server/test/fixtures/windguru/{micro_forecast.txt,station_current.json,stations_list.json}` → `watch/StallAlertKit/Tests/StallAlertKitTests/Fixtures/windguru/`
 
 **Interfaces:**
-- Consumes: `WindDataProvider`, `Conditions` types; windguru endpoints per `docs/windguru-api-notes.md`; Windguru credentials via init.
-- Produces: `public final class DirectWindguruClient: WindDataProvider` — `init(username: String, password: String, session: URLSession = .shared)`. Internally rate-limits: reuses a cached forecast younger than 15 min and a station reading younger than 5 min instead of re-fetching. Builds the same `Conditions` value the service would return (`stale: false`, `generatedAt` = now; `station: nil` if no station within 30 km — mirrors `Stallalert.Geo` haversine logic in Swift).
+- Consumes: `WindDataProvider`, `ProviderError` (Task 4); `Conditions`/`Forecast`/`Station`/`StationReading` (Task 1).
+- Produces:
 
-- [ ] **Step 1: Copy fixtures and write failing tests**
+```swift
+public enum MicroForecastParser {
+    // nil unless >= 3 timesteps parse; model is "gfs-micro"; times UTC
+    public static func parse(_ html: String) -> Forecast?
+}
+public final class DirectWindguruClient: WindDataProvider {
+    public init(username: String, microPassword: String, session: URLSession = .shared)
+    // Caching/rate limits (in-memory): forecast reused < 15 min, station reading < 5 min,
+    // parsed station LIST reused < 6 h (it is ~1 MB over LTE — never refetch per tick).
+    // Empty username/microPassword -> throws ProviderError.notConfigured before any HTTP.
+    // Station: nearest within 30 km (haversine) else nil in Conditions.
+}
+```
+
+- [ ] **Step 1: Copy fixtures and write failing MicroForecastParser tests**
 
 ```bash
 mkdir -p watch/StallAlertKit/Tests/StallAlertKitTests/Fixtures/windguru
-cp server/test/fixtures/windguru/*.json watch/StallAlertKit/Tests/StallAlertKitTests/Fixtures/windguru/
+cp server/test/fixtures/windguru/micro_forecast.txt \
+   server/test/fixtures/windguru/station_current.json \
+   server/test/fixtures/windguru/stations_list.json \
+   watch/StallAlertKit/Tests/StallAlertKitTests/Fixtures/windguru/
 ```
+
+Read the real `micro_forecast.txt` first. Its shape (verified during server work): an HTML page; the first `<pre>` block contains an init line like `GFS 13 km (init: 2026-07-06 18 UTC)` and 179 rows like `Mon 6. 18h  2  4  ESE  122` — columns are day-of-month, hour, wind (kn), gusts (kn), cardinal direction (ignore), numeric degrees (use). Tests (exact values read from the file, matching the server's `micro_parser_test.exs` assertions):
 
 ```swift
-// watch/StallAlertKit/Tests/StallAlertKitTests/DirectWindguruClientTests.swift
-import XCTest
-@testable import StallAlertKit
-
-final class DirectWindguruClientTests: XCTestCase {
-    private func data(_ name: String) -> Data {
-        let url = Bundle.module.url(forResource: "Fixtures/windguru/\(name)", withExtension: "json")!
-        return try! Data(contentsOf: url)
-    }
-    private func client() -> DirectWindguruClient {
-        DirectWindguruClient(username: "u", password: "p", session: StubURLProtocol.makeSession())
-    }
-
-    func testFetchAssemblesConditionsFromWindguruEndpoints() async throws {
-        StubURLProtocol.handler = { req in
-            let q = req.url!.query ?? ""
-            if q.contains("q=forecast") { return (200, self.data("forecast")) }
-            if q.contains("q=stations") { return (200, self.data("stations_list")) }
-            if q.contains("q=station_data_current") { return (200, self.data("station_current")) }
-            return (404, Data())
-        }
-        let c = try await client().fetch(lat: 52.36, lon: 5.04)
-        XCTAssertEqual(c.forecast.model, "wg")
-        XCTAssertFalse(c.forecast.hours.isEmpty)
-        // station may be nil depending on fixture distances; both are valid outcomes
-    }
-
-    func testForecastIsRateLimited() async throws {
-        nonisolated(unsafe) var forecastCalls = 0
-        StubURLProtocol.handler = { req in
-            let q = req.url!.query ?? ""
-            if q.contains("q=forecast") { forecastCalls += 1; return (200, self.data("forecast")) }
-            if q.contains("q=stations") { return (200, self.data("stations_list")) }
-            if q.contains("q=station_data_current") { return (200, self.data("station_current")) }
-            return (404, Data())
-        }
-        let c = client()
-        _ = try await c.fetch(lat: 52.36, lon: 5.04)
-        _ = try await c.fetch(lat: 52.36, lon: 5.04)   // within 15 min -> cached forecast
-        XCTAssertEqual(forecastCalls, 1)
-    }
-
-    func testWindguruErrorSurfacesAsProviderError() async {
-        StubURLProtocol.handler = { _ in (500, Data()) }
-        do { _ = try await client().fetch(lat: 1, lon: 1); XCTFail("should throw") }
-        catch { XCTAssertTrue(error is ProviderError) }
-    }
+func testParsesRealFixture() throws {
+    let html = try String(contentsOf: Bundle.module.url(forResource: "Fixtures/windguru/micro_forecast", withExtension: "txt")!)
+    let f = MicroForecastParser.parse(html)!
+    XCTAssertEqual(f.model, "gfs-micro")
+    XCTAssertEqual(f.initTime, ISO8601DateFormatter().date(from: "2026-07-06T18:00:00Z"))
+    XCTAssertEqual(f.hours.count, 179)
+    XCTAssertEqual(f.hours[0].windKn, 2); XCTAssertEqual(f.hours[0].gustKn, 4); XCTAssertEqual(f.hours[0].dirDeg, 122)
+    XCTAssertEqual(f.hours[0].time, ISO8601DateFormatter().date(from: "2026-07-06T18:00:00Z"))
+    // month rollover: the fixture spans Jul 6 -> Jul 22; assert a late-July row's date is correct
+    XCTAssertEqual(f.hours, f.hours.sorted { $0.time < $1.time })
 }
+func testRejectsGarbageAndTooFewSteps() { /* "<html>nope" -> nil; a synthetic <pre> with 2 rows -> nil */ }
+func testMonthRollover() { /* synthetic <pre>: init Dec 31, rows "31. 22h", "31. 23h", "1. 00h", "1. 01h" -> Jan 1 of NEXT year */ }
 ```
 
-- [ ] **Step 2: Run to verify failure, then implement**
+- [ ] **Step 2: Run to verify failure, then implement MicroForecastParser**
 
-Parsing mirrors the server's `ForecastParser`/`StationParser` (Tasks 3–4 of the server plan) — same field names, adjusted to the captured fixtures:
+Mirror `micro_parser.ex` in Swift with `NSRegularExpression`/`firstMatch`: extract the first `<pre>[\s\S]*?</pre>` block; parse the init line `\(init: (\d{4})-(\d{2})-(\d{2}) (\d{1,2}) UTC\)` for year/month/day/hour; per-line row regex `^\s*[A-Za-z]{2,3}\s+(\d{1,2})\.\s+(\d{1,2})h\s+([\d.]+)\s+([\d.]+)\s+[A-Z]{1,3}\s+([\d.]+)\s*$` capturing day, hour, wind, gust, degrees. Track month/year rollover: when a row's day is LESS than the previous row's day, increment month (wrapping December → January of the next year). Build `WindStep`s in UTC via `DateComponents` + a UTC `Calendar`. Return nil unless ≥ 3 steps. `swift test` → parser tests PASS.
+
+- [ ] **Step 3: Write failing DirectWindguruClient tests**
+
+Use `StubURLProtocol` (Task 4), dispatching on `request.url!.host` + query:
 
 ```swift
-// watch/StallAlertKit/Sources/StallAlertKit/DirectWindguruClient.swift
-import Foundation
-
-public final class DirectWindguruClient: WindDataProvider, @unchecked Sendable {
-    private let username: String
-    private let password: String
-    private let session: URLSession
-    private let base = URL(string: "https://www.windguru.cz/int/iapi.php")!
-
-    private let lock = NSLock()
-    private var cachedForecast: (value: Forecast, at: Date)?
-    private var cachedStation: (value: Station?, at: Date)?
-
-    public init(username: String, password: String, session: URLSession = .shared) {
-        self.username = username; self.password = password; self.session = session
-    }
-
-    public func fetch(lat: Double, lon: Double) async throws -> Conditions {
-        let forecast: Forecast
-        if let c = cached(\.cachedForecast, maxAge: 15 * 60) {
-            forecast = c
-        } else {
-            forecast = try parseForecast(try await get(["q": "forecast", "lat": "\(lat)", "lon": "\(lon)", "id_model": "wg"]))
-            store { $0.cachedForecast = (forecast, Date()) }
-        }
-
-        let station: Station?
-        if let c = cached(\.cachedStation, maxAge: 5 * 60) {
-            station = c
-        } else {
-            station = try await fetchNearestStation(lat: lat, lon: lon)
-            store { $0.cachedStation = (station, Date()) }
-        }
-
-        return Conditions(generatedAt: Date(), stale: false, forecast: forecast, station: station)
-    }
-
-    // MARK: HTTP
-
-    private func get(_ params: [String: String]) async throws -> [String: Any] {
-        var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)!
-        comps.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
-        var req = URLRequest(url: comps.url!, timeoutInterval: 10)
-        req.setValue("https://www.windguru.cz/", forHTTPHeaderField: "Referer")
-        let (data, resp): (Data, URLResponse)
-        do { (data, resp) = try await session.data(for: req) }
-        catch { throw ProviderError.transport }
-        guard (resp as! HTTPURLResponse).statusCode == 200 else {
-            throw ProviderError.serverError((resp as! HTTPURLResponse).statusCode)
-        }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw ProviderError.badPayload
-        }
-        return json
-    }
-
-    // MARK: Parsing (mirror of server parsers — adjust keys to captured fixtures)
-
-    private func parseForecast(_ json: [String: Any]) throws -> Forecast {
-        guard let fcst = json["fcst"] as? [String: Any],
-              let initStamp = fcst["initstamp"] as? Int,
-              let hours = fcst["hours"] as? [Int],
-              let speeds = fcst["WINDSPD"] as? [Double],
-              let gusts = fcst["GUST"] as? [Double],
-              let dirs = fcst["SMER"] as? [Double],
-              hours.count == speeds.count, hours.count == gusts.count, hours.count == dirs.count
-        else { throw ProviderError.badPayload }
-        let initTime = Date(timeIntervalSince1970: TimeInterval(initStamp))
-        let steps = hours.indices.map { i in
-            WindStep(time: initTime.addingTimeInterval(TimeInterval(hours[i]) * 3600),
-                     windKn: speeds[i], gustKn: gusts[i], dirDeg: dirs[i])
-        }.sorted { $0.time < $1.time }
-        return Forecast(model: "wg", initTime: initTime, hours: steps)
-    }
-
-    private func fetchNearestStation(lat: Double, lon: Double) async throws -> Station? {
-        let json = try await get(["q": "stations", "lat": "\(lat)", "lon": "\(lon)"])
-        guard let list = json["stations"] as? [[String: Any]] else { throw ProviderError.badPayload }
-        let stations: [(id: Int, name: String, lat: Double, lon: Double, d: Double)] = list.compactMap {
-            guard let id = $0["id_station"] as? Int, let name = $0["station"] as? String,
-                  let sLat = $0["lat"] as? Double, let sLon = $0["lon"] as? Double else { return nil }
-            return (id, name, sLat, sLon, Self.haversineKm(lat, lon, sLat, sLon))
-        }
-        guard let nearest = stations.min(by: { $0.d < $1.d }), nearest.d <= 30 else { return nil }
-
-        let r = try await get(["q": "station_data_current", "id_station": "\(nearest.id)"])
-        guard let avg = r["wind_avg"] as? Double, let max = r["wind_max"] as? Double,
-              let dir = r["wind_direction"] as? Double, let ts = r["unixtime"] as? Int
-        else { throw ProviderError.badPayload }
-
-        let reading = StationReading(time: Date(timeIntervalSince1970: TimeInterval(ts)),
-                                     windKn: avg, gustKn: max, dirDeg: dir)
-        return Station(id: nearest.id, name: nearest.name,
-                       distanceKm: (nearest.d * 10).rounded() / 10, reading: reading)
-    }
-
-    static func haversineKm(_ lat1: Double, _ lon1: Double, _ lat2: Double, _ lon2: Double) -> Double {
-        func rad(_ d: Double) -> Double { d * .pi / 180 }
-        let dLat = rad(lat2 - lat1), dLon = rad(lon2 - lon1)
-        let a = sin(dLat / 2) * sin(dLat / 2) + cos(rad(lat1)) * cos(rad(lat2)) * sin(dLon / 2) * sin(dLon / 2)
-        return 2 * 6371 * asin(sqrt(a))
-    }
-
-    // MARK: Cache helpers
-
-    private func cached<T>(_ path: KeyPath<DirectWindguruClient, (value: T, at: Date)?>, maxAge: TimeInterval) -> T? {
-        lock.lock(); defer { lock.unlock() }
-        guard let entry = self[keyPath: path], Date().timeIntervalSince(entry.at) < maxAge else { return nil }
-        return entry.value
-    }
-
-    private func store(_ mutate: (DirectWindguruClient) -> Void) {
-        lock.lock(); defer { lock.unlock() }
-        mutate(self)
-    }
-}
+// micro.windguru.cz            -> (200, fixture micro_forecast.txt bytes)
+// www.windguru.net  q=station_list -> (200, fixture stations_list.json)
+// www.windguru.cz   q=station_data -> (200, fixture station_current.json)
 ```
 
-(If Task 1 of the server plan showed these endpoints need an authenticated login/cookie, add the same login flow here using `username`/`password`, one retry on 401/403.)
+Required tests:
+1. Happy path `fetch(lat: 39.92, lon: 3.09)`: forecast has 179 steps + model "gfs-micro"; station is the fixture's nearest entry to (39.92, 3.09) — read the fixture, compute which entry that is, and assert its name/id; reading equals the fixture's max-unixtime sample (`unixtime 1783398300 → 2026-07-07T04:25:00Z, wind 0.1, gust 0.5, dir 148` — re-verify against the file).
+2. Micro credentials appear as `u`/`p` query items; iapi requests carry `User-Agent` and `Referer` headers; the MICRO request needs no special headers.
+3. Empty creds → `ProviderError.notConfigured`, and the stub proves NO request was made.
+4. Caching: two `fetch` calls → micro hit once, station_list hit once (count via stub); station_data respects its own 5-min reuse.
+5. Error mapping: micro 500 → `.serverError`; station_list garbage → `.badPayload`; a station failure does NOT fail the whole fetch — forecast still returned with `station: nil` (mirror the graceful degradation philosophy; document it in the client's doc comment).
+6. Station farther than 30 km (synthetic list) → `station: nil`.
 
-- [ ] **Step 3: Run tests to verify pass, commit**
+- [ ] **Step 4: Run to verify failure, then implement DirectWindguruClient**
 
-Run: `swift test` → PASS.
+Structure mirrors the server's `http_adapter.ex`: a browser UA constant + `Referer` on iapi calls; station-list parsing skips entries without usable `id_station`/`lat`/`lon`, name falls back `name` → `spotname` → skip; `q=station_data` params `id_station`, `from`/`to` (UTC ISO-8601, now−60 min .. now), `avg_minutes=5`; windowed sample selection per `station_parser.ex` (equal-length `unixtime`/`wind_avg`/`wind_max`/`wind_direction` arrays or `.badPayload`; skip samples with any nil; pick max unixtime). Thread-safety via a lock like Task 4's pattern (`@unchecked Sendable` + `NSLock`). `swift test` → PASS.
+
+- [ ] **Step 5: Full suite + commit**
+
+Run: `cd watch/StallAlertKit && swift test`
+Expected: all tests pass.
 
 ```bash
 git add watch
-git commit -m "feat(watch): direct windguru fallback client with rate limiting"
+git commit -m "feat(watch): micro-API direct fallback client with station endpoints"
 ```
 
 ---
@@ -1037,7 +942,7 @@ public struct Settings {
     // Secrets accessed via SecretStore keys:
     public static let serviceTokenKey = "service_token"
     public static let wgUsernameKey = "wg_username"
-    public static let wgPasswordKey = "wg_password"
+    public static let wgMicroPasswordKey = "wg_micro_password"
 }
 ```
 
@@ -1128,7 +1033,7 @@ public struct Settings {
 
     public static let serviceTokenKey = "service_token"
     public static let wgUsernameKey = "wg_username"
-    public static let wgPasswordKey = "wg_password"
+    public static let wgMicroPasswordKey = "wg_micro_password"
 
     public static func load(defaults: UserDefaults, secrets: SecretStore) -> Settings {
         let threshold = defaults.object(forKey: "threshold_kn") as? Double ?? 12
@@ -1285,7 +1190,7 @@ final class SessionController: NSObject {
         }
         let service = ServiceClient(baseURL: url, token: token)
         let direct = DirectWindguruClient(username: secrets.get(Settings.wgUsernameKey) ?? "",
-                                          password: secrets.get(Settings.wgPasswordKey) ?? "")
+                                          microPassword: secrets.get(Settings.wgMicroPasswordKey) ?? "")
         provider = FailoverProvider(service: service, direct: direct)
         policy = AlertPolicy(thresholdKn: settings.thresholdKn)
 
@@ -1552,7 +1457,7 @@ struct SettingsView: View {
     @State private var serviceURL = ""
     @State private var serviceToken = ""
     @State private var wgUser = ""
-    @State private var wgPass = ""
+    @State private var wgMicroPass = ""
     private let secrets = KeychainStore()
 
     var body: some View {
@@ -1566,7 +1471,7 @@ struct SettingsView: View {
             }
             Section("Windguru (fallback)") {
                 TextField("Username", text: $wgUser)
-                SecureField("Password", text: $wgPass)
+                SecureField("Secondary (API) password", text: $wgMicroPass)
             }
             Section {
                 Button("Test alarm") { AlertPresenter().fire() }
@@ -1586,7 +1491,7 @@ struct SettingsView: View {
         s.save(defaults: .standard, secrets: secrets)
         if !serviceToken.isEmpty { secrets.set(Settings.serviceTokenKey, serviceToken) }
         if !wgUser.isEmpty { secrets.set(Settings.wgUsernameKey, wgUser) }
-        if !wgPass.isEmpty { secrets.set(Settings.wgPasswordKey, wgPass) }
+        if !wgMicroPass.isEmpty { secrets.set(Settings.wgMicroPasswordKey, wgMicroPass) }
         session.settings = s
         dismiss()
     }
