@@ -26,8 +26,13 @@ final class SessionController: NSObject {
     private var provider: FailoverProvider?
     private var refreshTask: Task<Void, Never>?
     private let presenter = AlertPresenter()
+    private var isStarting = false
 
     func startSession() async {
+        guard phase == .idle, !isStarting else { return }
+        isStarting = true
+        defer { isStarting = false }
+
         let secrets = KeychainStore()
         guard let url = settings.serviceURL, let token = secrets.get(Settings.serviceTokenKey) else {
             lastError = "Configure service URL and token in Settings"
@@ -62,6 +67,18 @@ final class SessionController: NSObject {
     }
 
     private func startWorkout() async {
+        guard HKHealthStore.isHealthDataAvailable() else {
+            lastError = "Health data unavailable"
+            return
+        }
+        do {
+            try await healthStore.requestAuthorization(
+                toShare: [HKObjectType.workoutType()], read: [])
+        } catch {
+            lastError = "Health authorization failed: \(error.localizedDescription)"
+            return
+        }
+
         let config = HKWorkoutConfiguration()
         config.activityType = .surfingSports   // closest type to kitesurfing
         config.locationType = .outdoor
@@ -75,6 +92,7 @@ final class SessionController: NSObject {
     }
 
     private func startRefreshLoop() {
+        refreshTask?.cancel()
         refreshTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refreshTick()
