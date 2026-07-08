@@ -16,6 +16,10 @@ review and verify specific decisions.
       Lock engaged, wait past one 5-min refresh tick — data still updates
       (secrets are stored AfterFirstUnlockThisDeviceOnly; a failure here
       means credential reads are blocked mid-session).
+- [ ] **Silent Mode OFF** (Control Center → bell icon not red). watchOS
+      Silent Mode mutes app audio entirely (haptics unaffected) — this is a
+      pre-session ritual item, not a one-time setting. Verified the hard way
+      2026-07-08.
 - [ ] Test alarm (Settings): haptics clearly felt on wrist; tone clearly
       audible outdoors at arm's length.
 
