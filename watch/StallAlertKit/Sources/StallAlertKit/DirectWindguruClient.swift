@@ -21,7 +21,10 @@ import Foundation
 /// All three responses are cached in-memory per instance (protected by a
 /// lock, since watchOS call sites may not be actor-isolated):
 ///
-///   - forecast: reused for 15 minutes (keyed by the exact lat/lon requested)
+///   - forecast: reused for 15 minutes when the requested point is within 2 km of
+///     the cached point (a rider drifts on the water — an exact lat/lon match would
+///     almost never hit and the micro API would get hit every tick, well above its
+///     intended cadence)
 ///   - station reading: reused for 5 minutes (keyed by station id)
 ///   - parsed station list: reused for 6 hours — the raw payload is ~1 MB
 ///     over LTE, so it must never be refetched on every tick.
@@ -48,6 +51,7 @@ public final class DirectWindguruClient: WindDataProvider, @unchecked Sendable {
     private static let stationReadingTTL: TimeInterval = 5 * 60
     private static let stationListTTL: TimeInterval = 6 * 60 * 60
     private static let maxStationDistanceKm: Double = 30
+    private static let forecastCacheRadiusKm: Double = 2
 
     private static let userAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
@@ -319,8 +323,9 @@ public final class DirectWindguruClient: WindDataProvider, @unchecked Sendable {
     private func readForecastCache(lat: Double, lon: Double) -> Forecast? {
         lock.lock(); defer { lock.unlock() }
         guard let cache = forecastCache,
-              cache.lat == lat, cache.lon == lon,
-              Date().timeIntervalSince(cache.fetchedAt) < Self.forecastTTL else {
+              Date().timeIntervalSince(cache.fetchedAt) < Self.forecastTTL,
+              Self.haversineKm(lat1: cache.lat, lon1: cache.lon, lat2: lat, lon2: lon)
+                  <= Self.forecastCacheRadiusKm else {
             return nil
         }
         return cache.forecast

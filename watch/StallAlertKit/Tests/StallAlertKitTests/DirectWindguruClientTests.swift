@@ -152,6 +152,34 @@ final class DirectWindguruClientTests: XCTestCase {
         XCTAssertEqual(counter.count("stationData"), 1)
     }
 
+    /// A rider drifts on the water between ticks, so the forecast cache hit test
+    /// can't require exact lat/lon equality — it uses a 2 km radius instead.
+    func testForecastCacheHitsWithinRadiusOfGpsDrift() async throws {
+        let counter = RequestCounter()
+        StubURLProtocol.handler = defaultHandler(counter: counter)
+
+        let c = client()
+        _ = try await c.fetch(lat: 39.92, lon: 3.09)
+        // ~0.5 km north of the original request (1 deg lat ~= 111.32 km) — within
+        // the 2 km cache radius, so this should reuse the cached forecast.
+        _ = try await c.fetch(lat: 39.9245, lon: 3.09)
+
+        XCTAssertEqual(counter.count("micro"), 1)
+    }
+
+    func testForecastCacheMissesBeyondRadius() async throws {
+        let counter = RequestCounter()
+        StubURLProtocol.handler = defaultHandler(counter: counter)
+
+        let c = client()
+        _ = try await c.fetch(lat: 39.92, lon: 3.09)
+        // ~5 km north of the original request — outside the 2 km cache radius,
+        // so this must trigger a second micro fetch.
+        _ = try await c.fetch(lat: 39.965, lon: 3.09)
+
+        XCTAssertEqual(counter.count("micro"), 2)
+    }
+
     // MARK: - 5. Error mapping + graceful station degradation
 
     func testMicroServerErrorMapsToServerError() async {
