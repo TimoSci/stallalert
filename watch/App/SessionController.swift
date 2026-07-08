@@ -52,6 +52,8 @@ final class SessionController: NSObject {
         // the error stays visible on the start screen (the refresh loop, which clears lastError, never starts).
         guard await startWorkout() else {
             locationManager.stopUpdatingLocation()
+            provider = nil
+            policy = nil
             return
         }
         WKInterfaceDevice.current().enableWaterLock()
@@ -64,6 +66,11 @@ final class SessionController: NSObject {
         workoutSession?.end()
         locationManager.stopUpdatingLocation()
         phase = .idle
+        // Clear provider/policy so a straggling refreshTick (or StartView's
+        // `.task { refreshTick() }`) guard-returns instead of firing a phantom
+        // alert from state left over by the ended session.
+        provider = nil
+        policy = nil
     }
 
     func acknowledgeAlert() {
@@ -103,36 +110,63 @@ final class SessionController: NSObject {
         refreshTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refreshTick()
-                try? await Task.sleep(for: .seconds(5 * 60))
+                // No data yet (first fetch still pending, e.g. waiting on a GPS fix) —
+                // retry quickly instead of waiting the full cadence so the rider gets
+                // their first reading fast. Once we have data, fall back to the normal
+                // 5-minute cadence.
+                let hasData = self?.conditions != nil
+                try? await Task.sleep(for: .seconds(hasData ? 5 * 60 : 10))
             }
         }
     }
 
     func refreshTick() async {
-        guard let provider, var policy else { return }
+        guard let provider else { return }
         guard let loc = locationManager.location else { return }
         do {
             let c = try await provider.fetch(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude)
             conditions = c
-            nextHour = ForecastEngine.nextHour(from: c.forecast, at: Date())
             activeSource = await provider.activeSource
             lastError = nil
-
-            let reading = c.station?.reading
-            let cause = policy.evaluate(.init(
-                forecastMinKn: nextHour?.minKn,
-                liveKn: reading?.windKn,
-                liveAgeSeconds: reading.map { Date().timeIntervalSince($0.time) }
-            ))
-            self.policy = policy
-            if let cause {
-                phase = .alerting(cause)
-                presenter.fire()
-            }
+            evaluateAndMaybeFire()
         } catch ProviderError.unauthorized {
-            lastError = "Check service token"
+            switch await provider.activeSource {
+            case .service: lastError = "Check service token"
+            case .direct: lastError = "Check Windguru login"
+            }
+            evaluateAndMaybeFire()
+        } catch ProviderError.notConfigured {
+            lastError = "Set Windguru login in Settings"
+            evaluateAndMaybeFire()
         } catch {
             lastError = "No data connection"
+            evaluateAndMaybeFire()
+        }
+    }
+
+    /// Evaluates the alert policy against whatever conditions are currently cached
+    /// (freshly fetched, or stale from a previous tick when this fetch failed) and
+    /// fires an alert if warranted. This is what keeps predicted-drop alerts working
+    /// while offline: `ForecastEngine.nextHour` slides its window over the cached
+    /// timeline and goes nil once the cache ages out of range, and the policy's
+    /// live-reading staleness cutoff excludes cached readings older than 20 minutes.
+    private func evaluateAndMaybeFire() {
+        guard let c = conditions, var policy else { return }
+        nextHour = ForecastEngine.nextHour(from: c.forecast, at: Date())
+
+        let reading = c.station?.reading
+        let cause = policy.evaluate(.init(
+            forecastMinKn: nextHour?.minKn,
+            liveKn: reading?.windKn,
+            liveAgeSeconds: reading.map { Date().timeIntervalSince($0.time) }
+        ))
+        self.policy = policy
+        // Only fire from an active session — guards against a straggling tick
+        // (or the start screen's own refresh) transitioning phase after the
+        // session has already ended or before it has started.
+        if let cause, phase == .running {
+            phase = .alerting(cause)
+            presenter.fire()
         }
     }
 }
