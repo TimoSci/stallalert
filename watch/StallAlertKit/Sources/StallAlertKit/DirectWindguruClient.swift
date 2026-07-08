@@ -200,25 +200,13 @@ public final class DirectWindguruClient: WindDataProvider, @unchecked Sendable {
     ) -> (entry: StationEntry, distanceKm: Double)? {
         var best: (entry: StationEntry, distanceKm: Double)?
         for entry in stations {
-            let distance = haversineKm(lat1: lat, lon1: lon, lat2: entry.lat, lon2: entry.lon)
+            let distance = GeoMath.haversineKm(lat, lon, entry.lat, entry.lon)
             guard distance <= maxStationDistanceKm else { continue }
             if best == nil || distance < best!.distanceKm {
                 best = (entry, distance)
             }
         }
         return best
-    }
-
-    private static func haversineKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double) -> Double {
-        let earthRadiusKm = 6371.0
-        let phi1 = lat1 * .pi / 180
-        let phi2 = lat2 * .pi / 180
-        let deltaPhi = (lat2 - lat1) * .pi / 180
-        let deltaLambda = (lon2 - lon1) * .pi / 180
-        let a = sin(deltaPhi / 2) * sin(deltaPhi / 2)
-            + cos(phi1) * cos(phi2) * sin(deltaLambda / 2) * sin(deltaLambda / 2)
-        let c = 2 * atan2(sqrt(a), sqrt(1 - a))
-        return earthRadiusKm * c
     }
 
     private func fetchStationReading(id: Int) async throws -> StationReading {
@@ -324,7 +312,7 @@ public final class DirectWindguruClient: WindDataProvider, @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard let cache = forecastCache,
               Date().timeIntervalSince(cache.fetchedAt) < Self.forecastTTL,
-              Self.haversineKm(lat1: cache.lat, lon1: cache.lon, lat2: lat, lon2: lon)
+              GeoMath.haversineKm(cache.lat, cache.lon, lat, lon)
                   <= Self.forecastCacheRadiusKm else {
             return nil
         }
