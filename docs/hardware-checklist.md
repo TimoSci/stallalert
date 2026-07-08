@@ -46,11 +46,12 @@ review and verify specific decisions.
       refreshes over watch LTE.
 
 ## Failover chain (the resilience story, end to end)
-- [ ] Stop the server container (`docker stop stallalert` on the OVH box)
+- [x] Stop the server container (`docker stop stallalert` on the OVH box)
       mid-session → within one 5-min tick the "direct" badge appears and
       data still updates (micro API + public station endpoints).
-- [ ] Restart the server (`docker start stallalert`) → badge disappears
-      within one tick.
+      ✅ verified on hardware 2026-07-08
+- [x] Restart the server (`docker start stallalert`) → badge disappears
+      within one tick. ✅ verified on hardware 2026-07-08
 - [ ] (review) Degraded-server mode: if the served forecast ever shows
       model "gfs-micro" while the service badge shows normal, the SERVER's
       Windguru cookie has expired — refresh WG_COOKIE per docs/deploy.md.
