@@ -44,11 +44,7 @@ defmodule Stallalert.RouterTest do
     end
 
     test "200 with normalized payload" do
-      conn =
-        conn(:get, "/v1/conditions?lat=52.36&lon=5.04")
-        |> put_req_header("authorization", "Bearer #{@token}")
-        |> Stallalert.Router.call(@opts)
-
+      conn = authed_get("/v1/conditions?lat=52.36&lon=5.04")
       assert conn.status == 200
       body = Jason.decode!(conn.resp_body)
       assert %{"generated_at" => _, "stale" => false, "forecast" => f, "station" => s} = body
@@ -56,5 +52,31 @@ defmodule Stallalert.RouterTest do
       assert %{"time" => _, "wind_kn" => _, "gust_kn" => _, "dir_deg" => _} = h
       assert %{"id" => _, "name" => _, "distance_km" => _, "reading" => _} = s
     end
+
+    test "station_id param is honored and echoed as manual" do
+      conn = authed_get("/v1/conditions?lat=52.36&lon=5.04&station_id=77")
+      assert conn.status == 200
+      body = Jason.decode!(conn.resp_body)
+      assert body["station"]["id"] == 77
+      assert body["station"]["source"] == "manual"
+    end
+
+    test "non-integer station_id is treated as absent" do
+      conn = authed_get("/v1/conditions?lat=52.36&lon=5.04&station_id=abc")
+      assert conn.status == 200
+      assert Jason.decode!(conn.resp_body)["station"]["source"] == "auto"
+    end
+
+    test "payload includes nearby_stations" do
+      conn = authed_get("/v1/conditions?lat=52.36&lon=5.04")
+      body = Jason.decode!(conn.resp_body)
+      assert [%{"id" => _, "name" => _, "distance_km" => _} | _] = body["nearby_stations"]
+    end
+  end
+
+  defp authed_get(path) do
+    conn(:get, path)
+    |> put_req_header("authorization", "Bearer #{@token}")
+    |> Stallalert.Router.call(@opts)
   end
 end

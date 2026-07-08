@@ -16,7 +16,9 @@ defmodule Stallalert.Router do
 
     with {lat, ""} <- Float.parse(conn.query_params["lat"] || ""),
          {lon, ""} <- Float.parse(conn.query_params["lon"] || "") do
-      case Stallalert.Conditions.get(lat, lon) do
+      station_id = parse_station_id(conn.query_params["station_id"])
+
+      case Stallalert.Conditions.get(Stallalert.Conditions, lat, lon, station_id: station_id) do
         {:ok, payload} -> json(conn, 200, serialize(payload))
         {:error, :no_data} -> json(conn, 503, %{error: "no data available yet"})
       end
@@ -35,6 +37,16 @@ defmodule Stallalert.Router do
     |> send_resp(status, Jason.encode!(data))
   end
 
+  defp parse_station_id(nil), do: nil
+  defp parse_station_id(""), do: nil
+
+  defp parse_station_id(value) do
+    case Integer.parse(value) do
+      {id, ""} -> id
+      _ -> nil
+    end
+  end
+
   defp serialize(payload) do
     cutoff = DateTime.add(DateTime.utc_now(), -3600, :second)
 
@@ -47,7 +59,8 @@ defmodule Stallalert.Router do
       generated_at: payload.generated_at,
       stale: payload.stale,
       forecast: %{payload.forecast | hours: hours},
-      station: payload.station
+      station: payload.station,
+      nearby_stations: payload.nearby_stations
     }
   end
 end
