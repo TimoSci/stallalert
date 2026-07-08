@@ -1,5 +1,16 @@
 import Foundation
 
+public struct NearbyStation: Codable, Equatable, Sendable {
+    public let id: Int
+    public let name: String
+    public let distanceKm: Double
+    public init(id: Int, name: String, distanceKm: Double) {
+        self.id = id
+        self.name = name
+        self.distanceKm = distanceKm
+    }
+}
+
 public struct WindStep: Codable, Equatable, Sendable {
     public let time: Date
     public let windKn: Double
@@ -42,11 +53,13 @@ public struct Station: Codable, Equatable, Sendable {
     public let name: String
     public let distanceKm: Double
     public let reading: StationReading?
-    public init(id: Int, name: String, distanceKm: Double, reading: StationReading?) {
+    public let source: String?
+    public init(id: Int, name: String, distanceKm: Double, reading: StationReading?, source: String? = nil) {
         self.id = id
         self.name = name
         self.distanceKm = distanceKm
         self.reading = reading
+        self.source = source
     }
 }
 
@@ -55,11 +68,13 @@ public struct Conditions: Codable, Equatable, Sendable {
     public let stale: Bool
     public let forecast: Forecast
     public let station: Station?
-    public init(generatedAt: Date, stale: Bool, forecast: Forecast, station: Station?) {
+    public let nearbyStations: [NearbyStation]?
+    public init(generatedAt: Date, stale: Bool, forecast: Forecast, station: Station?, nearbyStations: [NearbyStation]? = nil) {
         self.generatedAt = generatedAt
         self.stale = stale
         self.forecast = forecast
         self.station = station
+        self.nearbyStations = nearbyStations
     }
 
     public static func decoder() -> JSONDecoder {
