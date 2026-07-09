@@ -22,16 +22,21 @@ defmodule Stallalert.Windguru.Blend do
   Each constituent's own hourly/3-hourly steps (Windguru is hourly for
   roughly the first 78h, then 3-hourly -- see `ForecastParser`'s
   moduledoc) are linearly interpolated onto each common grid point
-  independently, mirroring `ForecastEngine.interpolate` on the watch
-  (`watch/StallAlertKit/Sources/StallAlertKit/ForecastEngine.swift`):
-  bracket the two surrounding raw steps, short-circuit on an exact time
-  match, and linearly blend `wind_kn`/`gust_kn`/`dir_deg` by the fraction
-  of the interval elapsed. As on the watch, this per-model lerp does not
-  special-case `dir_deg` wraparound (e.g. a model whose own adjacent raw
-  steps happen to jump 350 -> 10 would lerp straight through 180) --
-  accepted here for parity with the existing watch engine, and avoided in
-  practice because Windguru's own per-model direction series don't jump
-  by more than the grid resolution between adjacent steps.
+  independently: bracket the two surrounding raw steps, short-circuit on
+  an exact time match, and linearly blend `wind_kn`/`gust_kn` by the
+  fraction of the interval elapsed.
+
+  `dir_deg` cannot be linearly blended the same way (350 -> 10 must lerp
+  through the north seam at 0, not straight through 180), so it is
+  interpolated vectorially instead: the bracketing steps' directions are
+  each turned into a `{sin, cos}` unit vector, the vectors are lerped
+  component-wise by the same fraction, and the result is `atan2`'d back to
+  degrees and normalized to `[0, 360)`. If the lerped vector's magnitude is
+  negligible (`< 1.0e-9` -- the bracketing steps are opposite directions
+  and the fraction lands at the midpoint, 0.5), there is no meaningful
+  in-between direction; the fallback is the nearer bracketing step (`frac
+  < 0.5` -> before-step, otherwise after-step; exactly `0.5` deterministically
+  picks the before-step).
 
   A model only contributes to a grid step `t` when `t` falls within its
   own published horizon (its first step `<= t <=` its last step) --
@@ -207,9 +212,29 @@ defmodule Stallalert.Windguru.Blend do
       time: t,
       wind_kn: lerp(before.wind_kn, after_.wind_kn, fraction),
       gust_kn: lerp(before.gust_kn, after_.gust_kn, fraction),
-      dir_deg: lerp(before.dir_deg, after_.dir_deg, fraction)
+      dir_deg: lerp_direction(before.dir_deg, after_.dir_deg, fraction)
     }
   end
 
   defp lerp(a, b, fraction), do: a + (b - a) * fraction
+
+  # Interpolates a single model's own direction between its two bracketing
+  # raw steps vectorially -- lerp the {sin, cos} unit-vector components
+  # rather than the raw degrees -- so a step pair like 350 -> 10 blends
+  # through the north seam (0) instead of straight through 180. See the
+  # "Per-model interpolation" section of the moduledoc.
+  defp lerp_direction(before_deg, after_deg, fraction) do
+    sin = lerp(:math.sin(before_deg * @deg_to_rad), :math.sin(after_deg * @deg_to_rad), fraction)
+    cos = lerp(:math.cos(before_deg * @deg_to_rad), :math.cos(after_deg * @deg_to_rad), fraction)
+
+    if :math.sqrt(sin * sin + cos * cos) < @zero_magnitude_epsilon do
+      # Opposite directions at the midpoint (frac 0.5): no meaningful lerped
+      # direction. Fall back to the nearer bracketing step; exactly 0.5 is
+      # deterministic (before-step wins).
+      if fraction < 0.5, do: before_deg, else: after_deg
+    else
+      degrees = :math.atan2(sin, cos) * @rad_to_deg
+      if degrees < 0, do: degrees + 360, else: degrees
+    end
+  end
 end

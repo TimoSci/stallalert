@@ -55,11 +55,53 @@ defmodule Stallalert.Windguru.BlendTest do
     end
   end
 
+  describe "per-model direction interpolation crosses the north seam" do
+    test "direction interpolates across the north seam within a single model" do
+      # Model A: constant 1 deg on the hourly grid (deliberately *not* 0 --
+      # see note below), so it never perturbs the cross-model blend's
+      # direction away from whatever B contributes.
+      hourly_a = for h <- 0..2, do: step(DateTime.add(@now, h * 3600), 1, 1, 1)
+      # Model B: only two raw steps, +0h at 350 deg and +2h at 10 deg -- the
+      # grid's +1h point falls exactly at the midpoint between them, so B's
+      # own per-model interpolation must go through the seam (0), not
+      # through 180, when computing its +1h contribution.
+      steps_b = [step(@now, 1, 1, 350), step(DateTime.add(@now, 2 * 3600), 1, 1, 10)]
+
+      a = forecast("A", @now, hourly_a)
+      b = forecast("B", @now, steps_b)
+
+      assert {:ok, blended} = Blend.blend([{1, a}, {2, b}], %{1 => 1.0, 2 => 1.0}, @now)
+      [_h0, h1 | _] = blended.hours
+
+      # Equal-weight blend of A's 1 deg and B's (correctly) ~0 deg
+      # interpolated direction at +1h should land near 0.5, not near 90.5
+      # (what a naive scalar lerp of B's 350/10 through 180 produces: the
+      # cross-model vector mean of 1 deg and 180 deg).
+      #
+      # A is deliberately 1 deg, not 0: with A at exactly 0 deg, the buggy
+      # scalar-lerp B value (180 deg) is *exactly* antipodal to A, so the
+      # cross-model vector sum's magnitude collapses under
+      # @zero_magnitude_epsilon and the unrelated zero-magnitude fallback
+      # (lowest model id wins ties) silently returns A's 0 deg anyway --
+      # masking this bug behind a different one. Nudging A to 1 deg breaks
+      # that coincidental cancellation so the assertion actually exercises
+      # the per-model interpolation fix (confirmed empirically: at A = 0
+      # deg the buggy code returns exactly 0.0, a false GREEN; at A = 1 deg
+      # it returns ~90.5, a true RED -- see task-3-blend-report.md).
+      assert_direction_close(0.5, h1.dir_deg)
+    end
+  end
+
   describe "within-horizon only: short model stops contributing" do
     test "a model past its own horizon drops out of the grid step" do
+      # 10/20/40 (not 10/20/30): the 3-way mean (23.333...) and the A+C
+      # mean (25.0) are deliberately distinct, so a passing assertion below
+      # actually pins WHICH contributors were blended at each step rather
+      # than being satisfiable by either combination (10/20/30 would give
+      # 20.0 for both, masking a dropped-B or dropped-C bug).
       hourly_a = for h <- 0..48, do: step(DateTime.add(@now, h * 3600), 10, 10, 90)
       short_b = for h <- 0..2, do: step(DateTime.add(@now, h * 3600), 20, 20, 90)
-      hourly_c = for h <- 0..48, do: step(DateTime.add(@now, h * 3600), 30, 30, 90)
+      hourly_c = for h <- 0..48, do: step(DateTime.add(@now, h * 3600), 40, 40, 90)
 
       a = forecast("A", @now, hourly_a)
       b = forecast("B", @now, short_b)
@@ -74,10 +116,12 @@ defmodule Stallalert.Windguru.BlendTest do
       assert Enum.all?(ab.hours, &(&1.wind_kn == 15.0))
 
       assert {:ok, abc} = Blend.blend([{1, a}, {2, b}, {3, c}], koef, @now)
-      # full 49-point grid survives: +0h/+1h/+2h blend A+B+C, the rest
-      # blend A+C only -- both combinations average to 20.0 here.
+      # full 49-point grid survives: +0h/+1h/+2h blend A+B+C (mean 23.333),
+      # the rest blend A+C only (mean 25.0) once B ages out of horizon.
       assert length(abc.hours) == 49
-      assert Enum.all?(abc.hours, &(&1.wind_kn == 20.0))
+      {within_b_horizon, past_b_horizon} = Enum.split(abc.hours, 3)
+      Enum.each(within_b_horizon, &assert_in_delta(&1.wind_kn, 23.333333333333332, 1.0e-9))
+      assert Enum.all?(past_b_horizon, &(&1.wind_kn == 25.0))
     end
   end
 
@@ -87,6 +131,21 @@ defmodule Stallalert.Windguru.BlendTest do
 
       assert {:error, :insufficient_models} = Blend.blend([], %{}, @now)
       assert {:error, :insufficient_models} = Blend.blend([{1, a}], %{1 => 1.0}, @now)
+    end
+
+    test "no overlapping steps -> insufficient_models" do
+      # A only covers +0h..+2h, B only covers +10h..+12h -- two models are
+      # passed in (clearing the length(forecasts) < 2 short-circuit), but
+      # every point on the common grid has at most 1 in-horizon contributor,
+      # so every step is dropped and the overall result is still an error.
+      hours_a = for h <- 0..2, do: step(DateTime.add(@now, h * 3600), 10, 10, 90)
+      hours_b = for h <- 10..12, do: step(DateTime.add(@now, h * 3600), 20, 20, 90)
+
+      a = forecast("A", @now, hours_a)
+      b = forecast("B", @now, hours_b)
+
+      assert {:error, :insufficient_models} =
+               Blend.blend([{1, a}, {2, b}], %{1 => 1.0, 2 => 1.0}, @now)
     end
   end
 
@@ -172,13 +231,15 @@ defmodule Stallalert.Windguru.BlendTest do
       #   forecast_custom @+70h: wind 7.6, dir 71
       #   forecast_m117   @+4h:  wind 4.1, dir 72
       #   forecast_m52    @+1h:  wind 6.4, dir 101
-      constituent_winds = [7.6, 4.1, 6.4]
-      assert first.wind_kn >= Enum.min(constituent_winds)
-      assert first.wind_kn <= Enum.max(constituent_winds)
-
-      constituent_dirs = [71.0, 72.0, 101.0]
-      assert first.dir_deg >= Enum.min(constituent_dirs)
-      assert first.dir_deg <= Enum.max(constituent_dirs)
+      #
+      # Pinned to the exact equal-koef blend, not just min/max envelope
+      # containment -- an envelope check alone is satisfiable even if a
+      # contributor is silently dropped from the mean, so it doesn't
+      # actually prove all three constituents were blended.
+      #   wind: (7.6 + 4.1 + 6.4) / 3 = 6.033333333333334
+      #   dir:  koef-weighted vector mean of 71/72/101 deg = 81.23486272339358
+      assert_in_delta first.wind_kn, 6.0333333, 0.001
+      assert_direction_close(81.2349, first.dir_deg, 0.01)
     end
   end
 end
