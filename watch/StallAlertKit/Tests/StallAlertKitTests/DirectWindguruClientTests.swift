@@ -254,4 +254,83 @@ final class DirectWindguruClientTests: XCTestCase {
         XCTAssertEqual(station.name, "Fallback Spot")
         XCTAssertEqual(station.id, 9999)
     }
+
+    // MARK: - 8. Station override + nearby candidates (Task 7)
+
+    /// A query point placed exactly on the Barcelona-cluster fixture entry
+    /// id_station 1959 ("Gava mar", lat 41.26549 / lon 2.01265). This makes
+    /// two *distinct* real fixture ids both plausible station choices from
+    /// the same query point (verified independently via haversine over the
+    /// raw fixture):
+    ///   - id 1959 "Gava mar" at 0.0 km -- the auto-nearest choice.
+    ///   - id 868 "BUNKER BEACH CLUB" (lat 41.265259 / lon 1.981637) at
+    ///     ~2.59 km -- a genuinely different, in-range (<=50 km) manual
+    ///     override choice.
+    /// Unlike (39.92, 3.09), which has only one fixture station (4048)
+    /// within the 50 km override leash, this point exercises manual-vs-auto
+    /// actually diverging.
+    private let barcelonaClusterLat = 41.26549
+    private let barcelonaClusterLon = 2.01265
+
+    func testOverrideStationIsFetchedAndMarkedManual() async throws {
+        StubURLProtocol.handler = defaultHandler()
+
+        let conditions = try await client().fetch(
+            lat: barcelonaClusterLat, lon: barcelonaClusterLon, stationID: 868
+        )
+
+        let station = try XCTUnwrap(conditions.station)
+        XCTAssertEqual(station.id, 868)
+        XCTAssertEqual(station.name, "BUNKER BEACH CLUB")
+        XCTAssertEqual(station.source, "manual")
+        XCTAssertEqual(station.distanceKm, 2.6, accuracy: 0.05)
+    }
+
+    func testUnknownOverrideFallsBackToAuto() async throws {
+        StubURLProtocol.handler = defaultHandler()
+
+        // 999999999 doesn't exist in the fixture station list at all.
+        let conditions = try await client().fetch(lat: 39.92, lon: 3.09, stationID: 999_999_999)
+
+        let station = try XCTUnwrap(conditions.station)
+        XCTAssertEqual(station.id, 4048)
+        XCTAssertEqual(station.source, "auto")
+    }
+
+    func testFarOverrideFallsBackToAuto() async throws {
+        StubURLProtocol.handler = defaultHandler()
+
+        // id 2367 "Lomas del Cauquen" (Argentina, lat -41.169515 / lon
+        // -71.370423) is a real fixture entry, but ~11,735 km from
+        // (39.92, 3.09) -- nowhere near the 50 km override leash.
+        let conditions = try await client().fetch(lat: 39.92, lon: 3.09, stationID: 2367)
+
+        let station = try XCTUnwrap(conditions.station)
+        XCTAssertEqual(station.id, 4048)
+        XCTAssertEqual(station.source, "auto")
+    }
+
+    func testNearbyStationsPopulated() async throws {
+        StubURLProtocol.handler = defaultHandler()
+
+        let conditions = try await client().fetch(lat: 39.92, lon: 3.09)
+
+        let nearby = try XCTUnwrap(conditions.nearbyStations)
+        XCTAssertFalse(nearby.isEmpty)
+        XCTAssertLessThanOrEqual(nearby.count, 6)
+        XCTAssertEqual(nearby.first?.id, 4048)
+        for station in nearby {
+            XCTAssertLessThanOrEqual(station.distanceKm, 30)
+        }
+        XCTAssertEqual(nearby.map(\.distanceKm), nearby.map(\.distanceKm).sorted())
+    }
+
+    func testExistingAutoPathNowCarriesSource() async throws {
+        StubURLProtocol.handler = defaultHandler()
+
+        let conditions = try await client().fetch(lat: 39.92, lon: 3.09)
+
+        let station = try XCTUnwrap(conditions.station)
+        XCTAssertEqual(station.source, "auto")
+    }
 }

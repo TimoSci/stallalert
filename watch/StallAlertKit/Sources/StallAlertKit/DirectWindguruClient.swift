@@ -51,6 +51,16 @@ public final class DirectWindguruClient: WindDataProvider, @unchecked Sendable {
     private static let stationReadingTTL: TimeInterval = 5 * 60
     private static let stationListTTL: TimeInterval = 6 * 60 * 60
     private static let maxStationDistanceKm: Double = 30
+    // `nearbyStations` candidate radius: mirrors the server's `Geo` 30 km
+    // "representative" bound (see http_adapter.ex `@candidate_radius_km`) --
+    // same value as `maxStationDistanceKm` on purpose, kept as a separate
+    // name because the two express different concepts (auto-fallback cutoff
+    // vs. candidate-list radius) that happen to share a value today.
+    private static let candidateRadiusKm: Double = 30
+    private static let nearbyStationsLimit = 6
+    // A user-supplied `stationID` override is allowed a wider leash than
+    // auto-nearest: mirrors http_adapter.ex `@override_max_km`.
+    private static let overrideMaxDistanceKm: Double = 50
     private static let forecastCacheRadiusKm: Double = 2
 
     private static let userAgent =
@@ -73,9 +83,15 @@ public final class DirectWindguruClient: WindDataProvider, @unchecked Sendable {
         }
 
         let forecast = try await fetchForecast(lat: lat, lon: lon)
-        let station = await fetchStationOrNil(lat: lat, lon: lon, stationID: stationID)
+        let stationLeg = await fetchStationLeg(lat: lat, lon: lon, stationID: stationID)
 
-        return Conditions(generatedAt: Date(), stale: false, forecast: forecast, station: station)
+        return Conditions(
+            generatedAt: Date(),
+            stale: false,
+            forecast: forecast,
+            station: stationLeg.station,
+            nearbyStations: stationLeg.nearbyStations
+        )
     }
 
     // MARK: - Forecast (micro API)
@@ -117,28 +133,90 @@ public final class DirectWindguruClient: WindDataProvider, @unchecked Sendable {
         let lon: Double
     }
 
-    /// The station leg is fully independent of the forecast leg: any error
-    /// anywhere in here (transport, bad payload, no station in range)
-    /// degrades to `nil` rather than propagating, per this client's
-    /// documented graceful-degradation contract.
-    private func fetchStationOrNil(lat: Double, lon: Double, stationID: Int?) async -> Station? {
-        // Task 7 wires this: `stationID`, when non-nil, will select the named
-        // station directly instead of falling through to nearest-station lookup.
+    /// The station leg is fully independent of the forecast leg. Two
+    /// failure scopes are distinguished, per this client's documented
+    /// graceful-degradation contract:
+    ///
+    ///   - the station **list** fetch fails (transport, bad payload) -- both
+    ///     `station` and `nearbyStations` degrade to `nil`, since neither can
+    ///     be computed without the list.
+    ///   - the list fetch succeeds but the chosen station's own reading
+    ///     fetch fails, or no station is in range -- `station` is `nil`, but
+    ///     `nearbyStations` is still populated from the list.
+    ///
+    /// `stationID`, when non-nil and resolvable (see `resolveStation`),
+    /// selects that station directly (`source: "manual"`) instead of
+    /// falling through to nearest-station lookup (`source: "auto"`).
+    private func fetchStationLeg(
+        lat: Double, lon: Double, stationID: Int?
+    ) async -> (station: Station?, nearbyStations: [NearbyStation]?) {
+        guard let stations = try? await fetchStationList() else {
+            return (nil, nil)
+        }
+
+        let nearby = Self.buildNearbyStations(stations, lat: lat, lon: lon)
+
+        guard let resolved = Self.resolveStation(stations, lat: lat, lon: lon, stationID: stationID) else {
+            return (nil, nearby)
+        }
+
         do {
-            let stations = try await fetchStationList()
-            guard let nearest = Self.nearestStation(stations, lat: lat, lon: lon) else {
-                return nil
-            }
-            let reading = try await fetchStationReading(id: nearest.entry.id)
-            return Station(
-                id: nearest.entry.id,
-                name: nearest.entry.name,
-                distanceKm: nearest.distanceKm,
-                reading: reading
+            let reading = try await fetchStationReading(id: resolved.entry.id)
+            let station = Station(
+                id: resolved.entry.id,
+                name: resolved.entry.name,
+                distanceKm: Self.roundedKm(resolved.distanceKm),
+                reading: reading,
+                source: resolved.source
             )
+            return (station, nearby)
         } catch {
+            return (nil, nearby)
+        }
+    }
+
+    /// Chooses which station to fetch a reading for, mirroring the server's
+    /// `station_by_id`/`nearest_station` split (http_adapter.ex):
+    ///
+    ///   - `stationID`, if non-nil, found in the list, and within
+    ///     `overrideMaxDistanceKm` (compared **unrounded** -- matches the
+    ///     server's fixed round-before-compare bug) -> that station,
+    ///     `source: "manual"`.
+    ///   - otherwise -> nearest station within `maxStationDistanceKm`,
+    ///     `source: "auto"` (unknown/out-of-range overrides fall through to
+    ///     this same path).
+    private static func resolveStation(
+        _ stations: [StationEntry], lat: Double, lon: Double, stationID: Int?
+    ) -> (entry: StationEntry, distanceKm: Double, source: String)? {
+        if let stationID, let entry = stations.first(where: { $0.id == stationID }) {
+            let distance = GeoMath.haversineKm(lat, lon, entry.lat, entry.lon)
+            if distance <= overrideMaxDistanceKm {
+                return (entry, distance, "manual")
+            }
+        }
+
+        guard let nearest = nearestStation(stations, lat: lat, lon: lon) else {
             return nil
         }
+        return (nearest.entry, nearest.distanceKm, "auto")
+    }
+
+    /// All stations within `candidateRadiusKm` (compared unrounded), nearest
+    /// first, capped at `nearbyStationsLimit` -- mirrors the server's
+    /// `stations_near/3`. Distances are rounded to 0.1 in this output only.
+    private static func buildNearbyStations(
+        _ stations: [StationEntry], lat: Double, lon: Double
+    ) -> [NearbyStation] {
+        stations
+            .map { entry in (entry, GeoMath.haversineKm(lat, lon, entry.lat, entry.lon)) }
+            .filter { $0.1 <= candidateRadiusKm }
+            .sorted { $0.1 < $1.1 }
+            .prefix(nearbyStationsLimit)
+            .map { NearbyStation(id: $0.0.id, name: $0.0.name, distanceKm: roundedKm($0.1)) }
+    }
+
+    private static func roundedKm(_ value: Double) -> Double {
+        (value * 10).rounded() / 10
     }
 
     private func fetchStationList() async throws -> [StationEntry] {
