@@ -9,6 +9,7 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
   @reading "test/fixtures/windguru/station_current.json" |> File.read!() |> Jason.decode!()
   @stations "test/fixtures/windguru/stations_list.json" |> File.read!() |> Jason.decode!()
   @micro_forecast "test/fixtures/windguru/micro_forecast.txt" |> File.read!()
+  @spot_config "test/fixtures/windguru/forecast_spot.json" |> File.read!() |> Jason.decode!()
 
   setup do
     HTTPAdapter.clear_station_cache()
@@ -53,6 +54,44 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
   test "station_reading/1 fetches and normalizes" do
     Req.Test.stub(HTTPAdapter, fn conn -> Req.Test.json(conn, @reading) end)
     assert {:ok, %{wind_kn: _}} = HTTPAdapter.station_reading(1234)
+  end
+
+  test "spot_config/1 fetches and returns the raw forecast_spot JSON" do
+    Req.Test.stub(HTTPAdapter, fn conn -> Req.Test.json(conn, @spot_config) end)
+    assert {:ok, %{"tabs" => [_ | _]}} = HTTPAdapter.spot_config(1_189_718)
+  end
+
+  test "spot_config/1 sends the cookie header when WG_COOKIE is set" do
+    System.put_env("WG_COOKIE", "langc=en; session=fake; login_md5=fake")
+    test_pid = self()
+
+    Req.Test.stub(HTTPAdapter, fn conn ->
+      cookie = Plug.Conn.get_req_header(conn, "cookie")
+      send(test_pid, {:cookie_header, cookie})
+      Req.Test.json(conn, @spot_config)
+    end)
+
+    assert {:ok, _} = HTTPAdapter.spot_config(1_189_718)
+    assert_received {:cookie_header, ["langc=en; session=fake; login_md5=fake"]}
+  end
+
+  test "spot_config/1 sends no cookie header when WG_COOKIE is unset" do
+    System.delete_env("WG_COOKIE")
+    test_pid = self()
+
+    Req.Test.stub(HTTPAdapter, fn conn ->
+      cookie = Plug.Conn.get_req_header(conn, "cookie")
+      send(test_pid, {:cookie_header, cookie})
+      Req.Test.json(conn, @spot_config)
+    end)
+
+    assert {:ok, _} = HTTPAdapter.spot_config(1_189_718)
+    assert_received {:cookie_header, []}
+  end
+
+  test "spot_config/1 maps a 500 to an error tuple" do
+    Req.Test.stub(HTTPAdapter, fn conn -> Plug.Conn.send_resp(conn, 500, "boom") end)
+    assert {:error, {:http_status, 500}} = HTTPAdapter.spot_config(1_189_718)
   end
 
   test "nearest_station/2 resolves nearest from the list endpoint" do

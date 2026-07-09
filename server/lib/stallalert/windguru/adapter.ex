@@ -11,4 +11,5 @@ defmodule Stallalert.Windguru.Adapter do
               {:ok, %{id: integer, name: String.t(), distance_km: float}}
               | {:ok, nil}
               | {:error, term}
+  @callback spot_config(id_spot :: integer) :: {:ok, map} | {:error, term}
 end

@@ -1,5 +1,13 @@
 defmodule Stallalert.FakeAdapter do
   @behaviour Stallalert.Windguru.Adapter
+
+  # Fixture is loaded from the same file capture_fixtures.sh's "koef
+  # snapshot" comment was derived from; see
+  # Stallalert.Windguru.BlendConfig's module doc for the snapshot values.
+  @spot_config_fixture "test/fixtures/windguru/forecast_spot.json"
+                       |> File.read!()
+                       |> Jason.decode!()
+
   # Test process registers responses; defaults are healthy values.
   def set(key, value), do: :persistent_term.put({__MODULE__, key}, value)
   defp get_resp(key, default), do: :persistent_term.get({__MODULE__, key}, default)
@@ -10,6 +18,7 @@ defmodule Stallalert.FakeAdapter do
     :persistent_term.erase({__MODULE__, :station_reading})
     :persistent_term.erase({__MODULE__, :stations_near})
     :persistent_term.erase({__MODULE__, :station_by_id})
+    :persistent_term.erase({__MODULE__, :spot_config})
     :ok
   end
 
@@ -83,4 +92,9 @@ defmodule Stallalert.FakeAdapter do
   end
 
   defp default_station_by_id(_id), do: {:ok, nil}
+
+  @impl true
+  def spot_config(_id_spot) do
+    get_resp(:spot_config, {:ok, @spot_config_fixture})
+  end
 end

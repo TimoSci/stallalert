@@ -8,7 +8,7 @@ defmodule Stallalert.Application do
   @impl true
   def start(_type, _args) do
     children =
-      [Stallalert.Conditions] ++
+      [Stallalert.Windguru.BlendConfig, Stallalert.Conditions] ++
         if Application.get_env(:stallalert, :start_server, true) do
           [
             {Bandit,

@@ -140,6 +140,13 @@ defmodule Stallalert.Windguru.HTTPAdapter do
   end
 
   @impl true
+  def spot_config(id_spot) do
+    headers = base_headers() |> maybe_add_cookie()
+    params = %{q: "forecast_spot", id_spot: id_spot}
+    get(@cz_base, params, headers)
+  end
+
+  @impl true
   def station_by_id(id, lat, lon) do
     with {:ok, stations} <- fetch_station_list() do
       case Enum.find(stations, &(&1.id == id)) do
