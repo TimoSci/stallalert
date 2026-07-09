@@ -51,6 +51,7 @@ defmodule Stallalert.RouterTest do
       assert %{"model" => "wg", "init_time" => _, "hours" => [h | _]} = f
       assert %{"time" => _, "wind_kn" => _, "gust_kn" => _, "dir_deg" => _} = h
       assert %{"id" => _, "name" => _, "distance_km" => _, "reading" => _} = s
+      assert [%{"time" => _, "dir_deg" => _} | _] = s["reading"]["direction_history"]
     end
 
     test "station_id param is honored and echoed as manual" do

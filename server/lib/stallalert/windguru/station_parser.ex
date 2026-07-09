@@ -13,6 +13,10 @@ defmodule Stallalert.Windguru.StationParser do
   (the latest one), not simply the last array index — the arrays are
   expected in ascending order but this is not assumed.
 
+  The reading also carries `direction_history`: every usable sample from the
+  same window (nil-skipped, per the rule below), ascending by time, with the
+  last entry being the selected reading's own time/direction.
+
   `unixtime` (unix seconds, UTC) is authoritative for the timestamp; the
   sibling `datetime` string is in the station's *local* time
   (`datetime == unixtime + tzoffset`) and is display-only, never used here.
@@ -48,7 +52,13 @@ defmodule Stallalert.Windguru.StationParser do
   staleness is a downstream concern.
   """
 
-  @type reading :: %{time: DateTime.t(), wind_kn: float, gust_kn: float, dir_deg: float}
+  @type reading :: %{
+          time: DateTime.t(),
+          wind_kn: float,
+          gust_kn: float,
+          dir_deg: float,
+          direction_history: [%{time: DateTime.t(), dir_deg: float}]
+        }
   @type station :: %{id: integer, name: String.t(), lat: float, lon: float}
 
   @spec parse_reading(map) :: {:ok, reading} | {:error, :unexpected_format}
@@ -74,12 +84,20 @@ defmodule Stallalert.Windguru.StationParser do
         samples ->
           {t, avg, max, dir} = Enum.max_by(samples, fn {t, _avg, _max, _dir} -> t end)
 
+          direction_history =
+            samples
+            |> Enum.map(fn {t, _avg, _max, dir} ->
+              %{time: DateTime.from_unix!(t), dir_deg: dir * 1.0}
+            end)
+            |> Enum.sort_by(& &1.time, DateTime)
+
           {:ok,
            %{
              time: DateTime.from_unix!(t),
              wind_kn: avg * 1.0,
              gust_kn: max * 1.0,
-             dir_deg: dir * 1.0
+             dir_deg: dir * 1.0,
+             direction_history: direction_history
            }}
       end
     else

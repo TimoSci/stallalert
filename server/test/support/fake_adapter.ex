@@ -46,7 +46,18 @@ defmodule Stallalert.FakeAdapter do
   def station_reading(_id) do
     get_resp(
       :station_reading,
-      {:ok, %{time: ~U[2026-07-06 09:55:00Z], wind_kn: 15.5, gust_kn: 20.1, dir_deg: 230.0}}
+      {:ok,
+       %{
+         time: ~U[2026-07-06 09:55:00Z],
+         wind_kn: 15.5,
+         gust_kn: 20.1,
+         dir_deg: 230.0,
+         direction_history: [
+           %{time: ~U[2026-07-06 09:45:00Z], dir_deg: 210.0},
+           %{time: ~U[2026-07-06 09:50:00Z], dir_deg: 220.0},
+           %{time: ~U[2026-07-06 09:55:00Z], dir_deg: 230.0}
+         ]
+       }}
     )
   end
 

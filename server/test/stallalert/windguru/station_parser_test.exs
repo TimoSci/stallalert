@@ -18,6 +18,16 @@ defmodule Stallalert.Windguru.StationParserTest do
       assert r.wind_kn == 0.1
       assert r.gust_kn == 0.5
       assert r.dir_deg == 148.0
+
+      # direction_history: built from the same usable-samples list; the
+      # fixture's window has 12 fully-populated samples (no nulls in
+      # unixtime/wind_avg/wind_max/wind_direction), ascending by time, with
+      # the newest sample (== r.time) last.
+      assert [%{time: %DateTime{}, dir_deg: _} | _] = r.direction_history
+      assert length(r.direction_history) == 12
+      assert r.direction_history == Enum.sort_by(r.direction_history, & &1.time, DateTime)
+      assert List.last(r.direction_history).time == r.time
+      assert List.last(r.direction_history).dir_deg == r.dir_deg
     end
 
     test "rejects an empty window" do
@@ -90,6 +100,11 @@ defmodule Stallalert.Windguru.StationParserTest do
       assert r.wind_kn == 2.0
       assert r.gust_kn == 2.5
       assert r.dir_deg == 200.0
+
+      # the nil-valued (unusable) sample must be absent from direction_history too
+      assert length(r.direction_history) == 2
+      assert Enum.map(r.direction_history, & &1.dir_deg) == [100.0, 200.0]
+      assert List.last(r.direction_history).time == r.time
     end
   end
 
