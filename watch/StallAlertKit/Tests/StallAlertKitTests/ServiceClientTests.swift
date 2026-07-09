@@ -16,9 +16,19 @@ final class ServiceClientTests: XCTestCase {
             XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer tok")
             XCTAssertTrue(req.url!.absoluteString.contains("/v1/conditions?"))
             XCTAssertTrue(req.url!.query!.contains("lat=52.36"))
+            XCTAssertFalse(req.url!.query!.contains("station_id"))
             return (200, self.fixture)
         }
         let c = try await client().fetch(lat: 52.36, lon: 5.04)
+        XCTAssertEqual(c.station?.name, "Ijburg")
+    }
+
+    func testFetchIncludesStationIDWhenSet() async throws {
+        StubURLProtocol.handler = { req in
+            XCTAssertTrue(req.url!.query!.contains("station_id=4048"))
+            return (200, self.fixture)
+        }
+        let c = try await client().fetch(lat: 52.36, lon: 5.04, stationID: 4048)
         XCTAssertEqual(c.station?.name, "Ijburg")
     }
 

@@ -11,9 +11,13 @@ public final class ServiceClient: WindDataProvider, HealthCheckable {
         self.session = session
     }
 
-    public func fetch(lat: Double, lon: Double) async throws -> Conditions {
+    public func fetch(lat: Double, lon: Double, stationID: Int?) async throws -> Conditions {
         var comps = URLComponents(url: baseURL.appending(path: "/v1/conditions"), resolvingAgainstBaseURL: false)!
-        comps.queryItems = [.init(name: "lat", value: String(lat)), .init(name: "lon", value: String(lon))]
+        var queryItems = [URLQueryItem(name: "lat", value: String(lat)), URLQueryItem(name: "lon", value: String(lon))]
+        if let stationID {
+            queryItems.append(URLQueryItem(name: "station_id", value: String(stationID)))
+        }
+        comps.queryItems = queryItems
         var req = URLRequest(url: comps.url!, timeoutInterval: 5)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 

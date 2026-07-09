@@ -67,13 +67,13 @@ public final class DirectWindguruClient: WindDataProvider, @unchecked Sendable {
         self.session = session
     }
 
-    public func fetch(lat: Double, lon: Double) async throws -> Conditions {
+    public func fetch(lat: Double, lon: Double, stationID: Int?) async throws -> Conditions {
         guard !username.isEmpty, !microPassword.isEmpty else {
             throw ProviderError.notConfigured
         }
 
         let forecast = try await fetchForecast(lat: lat, lon: lon)
-        let station = await fetchStationOrNil(lat: lat, lon: lon)
+        let station = await fetchStationOrNil(lat: lat, lon: lon, stationID: stationID)
 
         return Conditions(generatedAt: Date(), stale: false, forecast: forecast, station: station)
     }
@@ -121,7 +121,9 @@ public final class DirectWindguruClient: WindDataProvider, @unchecked Sendable {
     /// anywhere in here (transport, bad payload, no station in range)
     /// degrades to `nil` rather than propagating, per this client's
     /// documented graceful-degradation contract.
-    private func fetchStationOrNil(lat: Double, lon: Double) async -> Station? {
+    private func fetchStationOrNil(lat: Double, lon: Double, stationID: Int?) async -> Station? {
+        // Task 7 wires this: `stationID`, when non-nil, will select the named
+        // station directly instead of falling through to nearest-station lookup.
         do {
             let stations = try await fetchStationList()
             guard let nearest = Self.nearestStation(stations, lat: lat, lon: lon) else {

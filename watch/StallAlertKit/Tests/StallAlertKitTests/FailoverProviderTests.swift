@@ -5,8 +5,10 @@ private final class FakeService: WindDataProvider, HealthCheckable, @unchecked S
     var result: Result<Conditions, Error> = .failure(ProviderError.transport)
     var healthy = false
     var fetchCount = 0
-    func fetch(lat: Double, lon: Double) async throws -> Conditions {
+    var lastStationID: Int?
+    func fetch(lat: Double, lon: Double, stationID: Int?) async throws -> Conditions {
         fetchCount += 1
+        lastStationID = stationID
         return try result.get()
     }
     func isHealthy() async -> Bool { healthy }
@@ -15,8 +17,10 @@ private final class FakeService: WindDataProvider, HealthCheckable, @unchecked S
 private final class FakeDirect: WindDataProvider, @unchecked Sendable {
     var result: Result<Conditions, Error> = .failure(ProviderError.transport)
     var fetchCount = 0
-    func fetch(lat: Double, lon: Double) async throws -> Conditions {
+    var lastStationID: Int?
+    func fetch(lat: Double, lon: Double, stationID: Int?) async throws -> Conditions {
         fetchCount += 1
+        lastStationID = stationID
         return try result.get()
     }
 }
@@ -31,20 +35,22 @@ final class FailoverProviderTests: XCTestCase {
         let service = FakeService(); service.result = .success(sampleConditions())
         let direct = FakeDirect()
         let p = FailoverProvider(service: service, direct: direct)
-        _ = try await p.fetch(lat: 1, lon: 1)
+        _ = try await p.fetch(lat: 1, lon: 1, stationID: 4048)
         let source = await p.activeSource
         XCTAssertEqual(source, .service)
         XCTAssertEqual(direct.fetchCount, 0)
+        XCTAssertEqual(service.lastStationID, 4048)
     }
 
     func testFailsOverOnTransportErrorAndServesViaDirect() async throws {
         let service = FakeService()   // fails with .transport
         let direct = FakeDirect(); direct.result = .success(sampleConditions())
         let p = FailoverProvider(service: service, direct: direct)
-        _ = try await p.fetch(lat: 1, lon: 1)
+        _ = try await p.fetch(lat: 1, lon: 1, stationID: 4048)
         let source = await p.activeSource
         XCTAssertEqual(source, .direct)
         XCTAssertEqual(direct.fetchCount, 1)
+        XCTAssertEqual(direct.lastStationID, 4048)
     }
 
     func testRecoversWhenHealthProbeSucceeds() async throws {
