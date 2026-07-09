@@ -99,3 +99,11 @@ review and verify specific decisions.
       still works via the direct path (micro + public station endpoints).
 - [ ] >5 km away from the spot (or next trip elsewhere): override no longer
       applies; returning within ~5 km re-applies it automatically.
+
+## Wind compass (added 2026-07-09)
+- [ ] Compass dial appears next to the live wind numbers; arrow direction
+      matches windguru.cz's arrow for the station (downwind convention).
+- [ ] Shadow ticks visible from the FIRST tick of a session (server ships
+      the past hour); they fade as the session progresses.
+- [ ] Stale reading (> 20 min): the whole dial grays out with the numbers.
+- [ ] Direct-fallback mode (server stopped): compass + shadows still render.

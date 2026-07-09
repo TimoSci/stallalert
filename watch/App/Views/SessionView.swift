@@ -33,9 +33,12 @@ struct SessionView: View {
                                     Image(systemName: "pin.fill").font(.caption2)
                                 }
                             }
-                            Text("\(Int(r.windKn.rounded())) kn  gust \(Int(r.gustKn.rounded()))")
-                                .font(.title3).bold()
-                                .foregroundStyle(ageSeconds(r) > 20 * 60 ? .secondary : color(for: r.windKn))
+                            HStack(spacing: 8) {
+                                Text("\(Int(r.windKn.rounded())) kn  gust \(Int(r.gustKn.rounded()))")
+                                    .font(.title3).bold()
+                                    .foregroundStyle(ageSeconds(r) > 20 * 60 ? .secondary : color(for: r.windKn))
+                                CompassView(reading: r, stale: ageSeconds(r) > 20 * 60)
+                            }
                             Text(ageLabel(r)).font(.footnote).foregroundStyle(.secondary)
                         }
                     }
