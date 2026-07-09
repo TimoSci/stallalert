@@ -96,7 +96,12 @@ curl https://stallalert.com/v1/health
 
 curl -H "Authorization: Bearer $API_TOKEN" \
   "https://stallalert.com/v1/conditions?lat=39.92&lon=3.09"
-# -> 200 with forecast + nearest station (verified live 2026-07-08)
+# -> 200 with forecast + nearest station + "nearby_stations" list
+#    (verified live 2026-07-08; nearby_stations added 2026-07-09)
+
+curl -H "Authorization: Bearer $API_TOKEN" \
+  "https://stallalert.com/v1/conditions?lat=39.92&lon=3.09&station_id=<id from nearby_stations>"
+# -> station.source == "manual" (station override honored)
 ```
 
 ## Updating (e.g. after a Windguru format change)

@@ -86,3 +86,16 @@ review and verify specific decisions.
 ## Endurance
 - [ ] 3-hour session (workout + GPS + LTE + 5-min ticks) ends with ≥ 25%
       battery remaining.
+
+## Station override (added 2026-07-09)
+- [ ] During a session, tap the NOW station block → picker opens with nearby
+      candidates (name + distance), "Auto (nearest)" checked.
+- [ ] Pick the 2nd-nearest station → pin icon appears next to the station
+      line; readings switch to that station within one tick.
+- [ ] Force-quit and relaunch mid-session area → override still applies
+      (per-spot persistence).
+- [ ] Reset via "Auto (nearest)" → pin gone, nearest station returns.
+- [ ] Server-down variant: stop the container, confirm the pin/override
+      still works via the direct path (micro + public station endpoints).
+- [ ] >5 km away from the spot (or next trip elsewhere): override no longer
+      applies; returning within ~5 km re-applies it automatically.
