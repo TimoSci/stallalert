@@ -330,6 +330,10 @@ public final class DirectWindguruClient: WindDataProvider, @unchecked Sendable {
     /// reading. Unequal array lengths are an error. A sample only counts if all
     /// four values are present (non-null) at that index; the reading returned is
     /// the sample with the greatest `unixtime`, not simply the last array index.
+    ///
+    /// The reading also carries `directionHistory`: every usable sample from the
+    /// same window (nil-skipped, per the rule above), ascending by time, with the
+    /// last entry being the selected reading's own time/direction.
     private static func parseStationReading(_ json: [String: Any]) -> StationReading? {
         guard let unixtimes = json["unixtime"] as? [Any],
               let avgs = json["wind_avg"] as? [Any],
@@ -342,6 +346,8 @@ public final class DirectWindguruClient: WindDataProvider, @unchecked Sendable {
         }
 
         var best: (unixtime: Int, avg: Double, max: Double, dir: Double)?
+        var usableSamples: [(unixtime: Int, dir: Double)] = []
+
         for i in 0..<unixtimes.count {
             guard let t = (unixtimes[i] as? NSNumber)?.intValue,
                   let avg = (avgs[i] as? NSNumber)?.doubleValue,
@@ -349,17 +355,30 @@ public final class DirectWindguruClient: WindDataProvider, @unchecked Sendable {
                   let dir = (dirs[i] as? NSNumber)?.doubleValue else {
                 continue
             }
+
+            // Collect all usable samples for direction history.
+            usableSamples.append((t, dir))
+
+            // Track the max-unixtime sample for the main reading.
             if best == nil || t > best!.unixtime {
                 best = (t, avg, max, dir)
             }
         }
 
         guard let sample = best else { return nil }
+
+        // Build direction history: sort usable samples ascending by time, then
+        // map to DirectionSample objects.
+        let directionHistory = usableSamples
+            .sorted { $0.unixtime < $1.unixtime }
+            .map { DirectionSample(time: Date(timeIntervalSince1970: Double($0.unixtime)), dirDeg: $0.dir) }
+
         return StationReading(
             time: Date(timeIntervalSince1970: Double(sample.unixtime)),
             windKn: sample.avg,
             gustKn: sample.max,
-            dirDeg: sample.dir
+            dirDeg: sample.dir,
+            directionHistory: directionHistory
         )
     }
 

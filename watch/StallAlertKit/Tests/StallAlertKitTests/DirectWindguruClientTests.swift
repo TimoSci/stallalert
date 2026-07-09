@@ -333,4 +333,66 @@ final class DirectWindguruClientTests: XCTestCase {
         let station = try XCTUnwrap(conditions.station)
         XCTAssertEqual(station.source, "auto")
     }
+
+    // MARK: - 9. Direction history (Task 3)
+
+    func testHappyPathFetchCarriesDirectionHistory() async throws {
+        StubURLProtocol.handler = defaultHandler()
+
+        let conditions = try await client().fetch(lat: 39.92, lon: 3.09)
+
+        let reading = try XCTUnwrap(conditions.station?.reading)
+        let history = try XCTUnwrap(reading.directionHistory)
+
+        // station_current.json has 12 fully-populated samples (verified against
+        // fixture: all have unixtime, wind_avg, wind_max, wind_direction present).
+        XCTAssertEqual(history.count, 12)
+
+        // Verify ascending by time: each sample's time <= next sample's time.
+        for i in 0..<(history.count - 1) {
+            XCTAssertLessThanOrEqual(history[i].time, history[i + 1].time)
+        }
+
+        // Last entry's time must match the reading's own time (the max-unixtime
+        // sample selected by parseStationReading).
+        XCTAssertEqual(history.last?.time, reading.time)
+
+        // Verify times match the fixture: first sample at 1783395000, last at 1783398300.
+        let expectedFirstTime = Date(timeIntervalSince1970: 1783395000)
+        let expectedLastTime = Date(timeIntervalSince1970: 1783398300)
+        XCTAssertEqual(history.first?.time, expectedFirstTime)
+        XCTAssertEqual(history.last?.time, expectedLastTime)
+    }
+
+    func testDirectionHistoryHandlesNilSamples() async throws {
+        // Create a station_data response with a mix of populated and nil samples.
+        // The test ensures nil-valued samples are absent from the history.
+        let stationDataWithNilSample = """
+        {
+            "unixtime": [1000000, 1000100, 1000200],
+            "wind_avg": [1.0, null, 2.0],
+            "wind_max": [1.5, 2.0, 2.5],
+            "wind_direction": [100, 110, 120]
+        }
+        """
+        StubURLProtocol.handler = defaultHandler(stationDataOverride: Data(stationDataWithNilSample.utf8))
+
+        let conditions = try await client().fetch(lat: 39.92, lon: 3.09)
+
+        let reading = try XCTUnwrap(conditions.station?.reading)
+        let history = try XCTUnwrap(reading.directionHistory)
+
+        // Only 2 samples are fully populated (indices 0 and 2); index 1 has a nil
+        // wind_avg, so it should be filtered out.
+        XCTAssertEqual(history.count, 2)
+        XCTAssertEqual(history[0].time, Date(timeIntervalSince1970: 1000000))
+        XCTAssertEqual(history[0].dirDeg, 100)
+        XCTAssertEqual(history[1].time, Date(timeIntervalSince1970: 1000200))
+        XCTAssertEqual(history[1].dirDeg, 120)
+
+        // The reading itself should be the max-unixtime sample: 1000200, direction 120.
+        XCTAssertEqual(reading.time, Date(timeIntervalSince1970: 1000200))
+        XCTAssertEqual(reading.dirDeg, 120)
+        XCTAssertEqual(reading.windKn, 2.0)
+    }
 }
