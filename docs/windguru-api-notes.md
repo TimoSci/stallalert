@@ -445,3 +445,19 @@ the next step is capturing the actual login XHR from a real browser session (Tas
 capture method) rather than guessing field names blind — the JS-driven login modal
 almost certainly posts to a specific, non-obvious endpoint/shape that black-box guessing
 under a small budget didn't surface.
+
+## WG model findings (probed 2026-07-10)
+
+- `q=forecast_spot&id_spot=<spot>` (cookie required) returns the spot's tab
+  config. Tab 0 is the WG tab: `id_model: 100`, `id_model_arr` (constituent
+  models incl. rundefs), and `blend/model_koef` — per-model blend weights.
+- `q=forecast&id_model=100` (spot OR custom coords) → HTTP 200
+  `{"return":"error","message":"Data not available! (wgmix)"}`. The WG
+  "model" is NOT servable: Windguru's frontend computes it client-side as a
+  koef-weighted blend of constituents.
+- Constituents confirmed serving CUSTOM lat/lon at 39.92/3.09 (cookie, one
+  probe each): 3 GFS 13 km (179 steps), 117 IFS-HRES 9 km (145), 52
+  AROME-FR 1.3 km (51), 104 ICON-2I 2.2 km (73), 64 Zephr-HD 2.6 km (75).
+  84 is the wave model (excluded from wind blending).
+- Regional models answer "outside grid" beyond their coverage — per-location
+  availability must be discovered per model.
