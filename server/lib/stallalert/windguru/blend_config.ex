@@ -67,7 +67,12 @@ defmodule Stallalert.Windguru.BlendConfig do
 
   @doc false
   # Test-only escape hatch so the live-fetched cache doesn't leak state
-  # between tests (or between a stale run and a fresh one).
+  # between tests (or between a stale run and a fresh one). Clears the GLOBAL
+  # persistent_term key shared with the app-supervised singleton. Test files
+  # using it revert the singleton to the snapshot for the rest of the suite —
+  # acceptable while only blend code reads weights(), but downstream test files
+  # depending on weights() must seed their own state in setup rather than
+  # assume the singleton's fetch.
   def clear_cache, do: :persistent_term.erase(@persistent_term_key)
 
   # Server
@@ -122,7 +127,7 @@ defmodule Stallalert.Windguru.BlendConfig do
     case find_wg_tab(body) do
       nil ->
         Logger.warning(
-          "BlendConfig: no tab with id_model=100 found in spot_config response; keeping previous weights"
+          "BlendConfig: no WG tab (id_model=100) found in spot_config response; keeping previous weights"
         )
 
       tab ->

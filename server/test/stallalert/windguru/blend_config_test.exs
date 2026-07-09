@@ -103,6 +103,37 @@ defmodule Stallalert.Windguru.BlendConfigTest do
            }
   end
 
+  test "constituent missing from model_koef defaults to 1.0" do
+    pid = start_supervised!({BlendConfig, name: nil})
+    sync(pid)
+
+    # Fixture with id 999 not present in model_koef
+    modified_fixture = %{
+      "tabs" => [
+        %{
+          "id_model" => 100,
+          "id_model_wave" => 84,
+          "id_model_arr" => [
+            %{"id_model" => 3},
+            %{"id_model" => 999},
+            %{"id_model" => 84}
+          ],
+          "blend" => %{
+            "model_koef" => %{"3" => 0.5}
+          }
+        }
+      ]
+    }
+
+    FakeAdapter.set(:spot_config, {:ok, modified_fixture})
+    send(pid, :refresh)
+    sync(pid)
+
+    weights = BlendConfig.weights()
+    assert 999 in weights.constituents
+    assert weights.koef[999] == 1.0
+  end
+
   test "finds the id_model=100 tab even when it is not tabs[0]" do
     body = %{
       "tabs" => [
@@ -141,7 +172,7 @@ defmodule Stallalert.Windguru.BlendConfigTest do
         sync(pid)
       end)
 
-    assert log =~ "id_model"
+    assert log =~ "no WG tab (id_model=100)"
 
     assert BlendConfig.weights() == %{
              constituents: @expected_constituents,
