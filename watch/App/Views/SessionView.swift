@@ -3,6 +3,7 @@ import StallAlertKit
 
 struct SessionView: View {
     @Environment(SessionController.self) private var session
+    @State private var showStationPicker = false
 
     var body: some View {
         ScrollView {
@@ -21,14 +22,24 @@ struct SessionView: View {
                 }
 
                 if let st = session.conditions?.station, let r = st.reading {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("NOW · \(st.name) \(st.distanceKm, specifier: "%.1f") km")
-                            .font(.caption2).foregroundStyle(.secondary)
-                        Text("\(Int(r.windKn.rounded())) kn  gust \(Int(r.gustKn.rounded()))")
-                            .font(.title3).bold()
-                            .foregroundStyle(ageSeconds(r) > 20 * 60 ? .secondary : color(for: r.windKn))
-                        Text(ageLabel(r)).font(.footnote).foregroundStyle(.secondary)
+                    Button {
+                        showStationPicker = true
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 3) {
+                                Text("NOW · \(st.name) \(st.distanceKm, specifier: "%.1f") km")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                if session.manualStationActive {
+                                    Image(systemName: "pin.fill").font(.caption2)
+                                }
+                            }
+                            Text("\(Int(r.windKn.rounded())) kn  gust \(Int(r.gustKn.rounded()))")
+                                .font(.title3).bold()
+                                .foregroundStyle(ageSeconds(r) > 20 * 60 ? .secondary : color(for: r.windKn))
+                            Text(ageLabel(r)).font(.footnote).foregroundStyle(.secondary)
+                        }
                     }
+                    .buttonStyle(.plain)
                 } else {
                     Text("No station nearby").font(.footnote).foregroundStyle(.secondary)
                 }
@@ -49,6 +60,7 @@ struct SessionView: View {
                 Button("End Session") { session.endSession() }.tint(.red)
             }
         }
+        .sheet(isPresented: $showStationPicker) { StationPickerView() }
     }
 
     private func color(for kn: Double) -> Color {

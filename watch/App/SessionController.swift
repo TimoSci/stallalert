@@ -17,6 +17,8 @@ final class SessionController: NSObject {
     private(set) var nextHour: NextHourView?
     private(set) var activeSource: DataSource = .service
     private(set) var lastError: String?
+    private(set) var nearbyStations: [NearbyStation] = []
+    private(set) var manualStationActive = false
     var settings = Settings.load(defaults: .standard, secrets: KeychainStore())
 
     private let healthStore = HKHealthStore()
@@ -27,6 +29,7 @@ final class SessionController: NSObject {
     private var refreshTask: Task<Void, Never>?
     private let presenter = AlertPresenter()
     private var isStarting = false
+    private let overrideStore = StationOverrideStore()
 
     func startSession() async {
         guard phase == .idle, !isStarting else { return }
@@ -123,11 +126,14 @@ final class SessionController: NSObject {
     func refreshTick() async {
         guard let provider else { return }
         guard let loc = locationManager.location else { return }
+        let override = overrideStore.override(nearLat: loc.coordinate.latitude, lon: loc.coordinate.longitude)
         do {
-            let c = try await provider.fetch(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude)
+            let c = try await provider.fetch(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude, stationID: override?.stationID)
             conditions = c
             activeSource = await provider.activeSource
             lastError = nil
+            nearbyStations = c.nearbyStations ?? []
+            manualStationActive = (override != nil) && (c.station?.source == "manual")
             evaluateAndMaybeFire()
         } catch ProviderError.unauthorized {
             switch await provider.activeSource {
@@ -142,6 +148,29 @@ final class SessionController: NSObject {
             lastError = "No data connection"
             evaluateAndMaybeFire()
         }
+    }
+
+    /// Pins the given station as the override for the rider's current spot and
+    /// refreshes immediately so the picker's selection is reflected right away.
+    /// No-ops without a GPS fix, since the override is keyed on location.
+    func selectStation(_ station: NearbyStation) {
+        guard let loc = locationManager.location else { return }
+        overrideStore.set(StationOverride(
+            lat: loc.coordinate.latitude,
+            lon: loc.coordinate.longitude,
+            stationID: station.id,
+            stationName: station.name
+        ))
+        Task { await refreshTick() }
+    }
+
+    /// Clears any override for the rider's current spot, reverting to the
+    /// nearest-station auto-selection, and refreshes immediately.
+    /// No-ops without a GPS fix, since the override lookup is keyed on location.
+    func selectAutoStation() {
+        guard let loc = locationManager.location else { return }
+        overrideStore.clearNear(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude)
+        Task { await refreshTick() }
     }
 
     /// Evaluates the alert policy against whatever conditions are currently cached
