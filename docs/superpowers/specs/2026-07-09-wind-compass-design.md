@@ -57,7 +57,7 @@ around the rim.
   - Ticks: for each history sample except any with `time == reading.time`
     (that one IS the arrow): angle = downwind-normalized like the arrow;
     opacity = `0.6 * max(0, 1 - age/3600)` with `age = now - sample.time`;
-    samples with age > 3600 s dropped; duplicate timestamps deduped.
+    samples with age >= 3600 s dropped (exact-hour boundary excluded so opacity is never 0); duplicate timestamps deduped.
   - Wraparound math (350° + 180° → 170°) pinned by tests.
 
 ### App layer

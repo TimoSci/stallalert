@@ -62,7 +62,7 @@ public enum CompassModel {
                 }
 
                 // Calculate opacity using linear fade: 0.6 * max(0, 1 - age/3600)
-                let opacity = 0.6 * max(0, 1 - age / 3600)
+                let opacity = min(0.6, 0.6 * max(0, 1 - age / 3600))  // min guards clock-skew (future-dated samples)
 
                 // Calculate downwind direction for this sample
                 let tickAngleDeg = normalizeDownwind(sample.dirDeg)
