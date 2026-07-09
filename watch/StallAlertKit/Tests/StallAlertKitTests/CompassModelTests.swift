@@ -73,4 +73,33 @@ final class CompassModelTests: XCTestCase {
         let render = CompassModel.render(reading: reading, now: t0)
         XCTAssertEqual(render.ticks.count, 0)
     }
+
+    func testExactHourBoundaryDropped() {
+        // Sample at exactly 3600s age -> NO tick emitted
+        // (opacity would be 0.6 * (1 - 3600/3600) = 0, violating invariant)
+        let history = DirectionSample(time: t0.addingTimeInterval(-3600), dirDeg: 90)
+        let reading = StationReading(time: t0, windKn: 10, gustKn: 15, dirDeg: 180, directionHistory: [history])
+        let render = CompassModel.render(reading: reading, now: t0)
+        XCTAssertEqual(render.ticks.count, 0)
+    }
+
+    func testDedupeFirstOccurrenceWins() {
+        // Two samples with same time but different dirDeg -> first sample's angle used
+        // First sample: dirDeg 100 -> downwind 280
+        // Second sample: dirDeg 200 -> downwind 20 (ignored due to dedup)
+        let time = t0.addingTimeInterval(-100)
+        let history1 = DirectionSample(time: time, dirDeg: 100)
+        let history2 = DirectionSample(time: time, dirDeg: 200)
+        let reading = StationReading(time: t0, windKn: 10, gustKn: 15, dirDeg: 180, directionHistory: [history1, history2])
+        let render = CompassModel.render(reading: reading, now: t0)
+        XCTAssertEqual(render.ticks.count, 1)
+        XCTAssertEqual(render.ticks[0].angleDeg, 280, accuracy: 0.001)
+    }
+
+    func testNegativeDirectionNormalizes() {
+        // dirDeg -10 -> arrow 170 ((-10 + 180) % 360 = 170)
+        let reading = StationReading(time: t0, windKn: 10, gustKn: 15, dirDeg: -10)
+        let render = CompassModel.render(reading: reading, now: t0)
+        XCTAssertEqual(render.arrowAngleDeg, 170, accuracy: 0.001)
+    }
 }

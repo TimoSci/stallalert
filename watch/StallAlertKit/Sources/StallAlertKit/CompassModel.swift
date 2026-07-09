@@ -56,8 +56,8 @@ public enum CompassModel {
                 // Calculate age in seconds
                 let age = now.timeIntervalSince(sample.time)
 
-                // Skip samples older than 3600 seconds
-                if age > 3600 {
+                // Skip samples older than or at 3600 seconds boundary
+                if age >= 3600 {
                     continue
                 }
 
