@@ -127,3 +127,16 @@ active, and be able to reset to automatic.
 
 Per-candidate live wind in the picker (costs N station calls per refresh);
 liveness tags; naming/managing favorite spots; any server-side persistence.
+
+## Implementation notes (post-review, 2026-07-09)
+
+- **StartView descope:** the spec named the picker on "start/session screens";
+  StartView has never displayed a station block, so the picker entry point
+  ships on the session screen only (plan-sanctioned). Overrides are set
+  during a running session.
+- The session screen's "No station nearby" state is also a picker entry
+  point (served station can be nil while candidates exist).
+- Operational note: `xcodegen generate` wipes the credential env values
+  pasted into the Xcode scheme — back up/restore the scheme around
+  regeneration (values are only needed for re-seeding; the watch persists
+  credentials after first launch).

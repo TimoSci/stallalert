@@ -41,7 +41,15 @@ struct SessionView: View {
                     }
                     .buttonStyle(.plain)
                 } else {
-                    Text("No station nearby").font(.footnote).foregroundStyle(.secondary)
+                    // Still a picker entry point: the served station can be nil
+                    // (reading failed / none in range) while candidates exist —
+                    // exactly when switching stations matters most.
+                    Button {
+                        showStationPicker = true
+                    } label: {
+                        Text("No station nearby").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
                 }
 
                 HStack {

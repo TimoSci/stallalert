@@ -6,6 +6,13 @@ struct StationPickerView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        // NavigationStack so the title renders inside the bare .sheet.
+        NavigationStack {
+            stationList
+        }
+    }
+
+    private var stationList: some View {
         List {
             Button {
                 session.selectAutoStation(); dismiss()
