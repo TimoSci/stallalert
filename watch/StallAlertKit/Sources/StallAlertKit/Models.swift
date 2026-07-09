@@ -11,6 +11,15 @@ public struct NearbyStation: Codable, Equatable, Sendable {
     }
 }
 
+public struct DirectionSample: Codable, Equatable, Sendable {
+    public let time: Date
+    public let dirDeg: Double
+    public init(time: Date, dirDeg: Double) {
+        self.time = time
+        self.dirDeg = dirDeg
+    }
+}
+
 public struct WindStep: Codable, Equatable, Sendable {
     public let time: Date
     public let windKn: Double
@@ -40,11 +49,13 @@ public struct StationReading: Codable, Equatable, Sendable {
     public let windKn: Double
     public let gustKn: Double
     public let dirDeg: Double
-    public init(time: Date, windKn: Double, gustKn: Double, dirDeg: Double) {
+    public let directionHistory: [DirectionSample]?
+    public init(time: Date, windKn: Double, gustKn: Double, dirDeg: Double, directionHistory: [DirectionSample]? = nil) {
         self.time = time
         self.windKn = windKn
         self.gustKn = gustKn
         self.dirDeg = dirDeg
+        self.directionHistory = directionHistory
     }
 }
 
