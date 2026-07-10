@@ -1,17 +1,31 @@
 defmodule Stallalert.Windguru.HTTPAdapterTest do
   use ExUnit.Case, async: false
   @moduletag :capture_log
-  alias Stallalert.Windguru.HTTPAdapter
+  alias Stallalert.FakeAdapter
+  alias Stallalert.Windguru.{BlendConfig, HTTPAdapter}
 
   @forecast_custom "test/fixtures/windguru/forecast_custom.json"
                    |> File.read!()
                    |> Jason.decode!()
+  @forecast_m52 "test/fixtures/windguru/forecast_m52.json" |> File.read!() |> Jason.decode!()
+  @forecast_m104 "test/fixtures/windguru/forecast_m104.json" |> File.read!() |> Jason.decode!()
   @reading "test/fixtures/windguru/station_current.json" |> File.read!() |> Jason.decode!()
   @stations "test/fixtures/windguru/stations_list.json" |> File.read!() |> Jason.decode!()
   @micro_forecast "test/fixtures/windguru/micro_forecast.txt" |> File.read!()
+  @spot_config "test/fixtures/windguru/forecast_spot.json" |> File.read!() |> Jason.decode!()
+
+  # The documented "outside grid" 404 body shape (docs/windguru-api-notes.md).
+  @outside_grid_body Jason.encode!(%{
+                       "return" => "error",
+                       "message" => "Data not available! (outside grid)"
+                     })
 
   setup do
     HTTPAdapter.clear_station_cache()
+    HTTPAdapter.clear_forecast_cache()
+    HTTPAdapter.clear_availability_cache()
+    FakeAdapter.reset()
+    BlendConfig.clear_cache()
 
     env_vars = ["WG_COOKIE", "WG_USERNAME", "WG_MICRO_PASSWORD"]
     originals = Map.new(env_vars, &{&1, System.get_env(&1)})
@@ -19,6 +33,10 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
 
     on_exit(fn ->
       HTTPAdapter.clear_station_cache()
+      HTTPAdapter.clear_forecast_cache()
+      HTTPAdapter.clear_availability_cache()
+      BlendConfig.clear_cache()
+      Application.delete_env(:stallalert, :windguru_spacing_test_hook)
 
       Enum.each(originals, fn
         {var, nil} -> System.delete_env(var)
@@ -29,16 +47,51 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
     :ok
   end
 
+  # Drains every `{:spacing_applied, ms}` message currently in the mailbox
+  # (see `HTTPAdapter`'s test-only spacing hook, armed via
+  # `windguru_spacing_test_hook`), in receive order.
+  defp collect_spacing_messages(acc \\ []) do
+    receive do
+      {:spacing_applied, ms} -> collect_spacing_messages([ms | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
+  # Seeds `BlendConfig.weights/0` (a global persistent_term-backed cache,
+  # see BlendConfig's clear_cache/0 doc) with an exact constituent list for
+  # a test, via a throwaway BlendConfig GenServer instance backed by
+  # `FakeAdapter` (NOT `HTTPAdapter` — this doesn't touch the `Req.Test`
+  # stub under test). `sync/1` waits for the seeding fetch to land.
+  defp seed_constituents(constituents) do
+    body = %{
+      "tabs" => [
+        %{
+          "id_model" => 100,
+          "id_model_wave" => 84,
+          "id_model_arr" => Enum.map(constituents, &%{"id_model" => &1}),
+          "blend" => %{"model_koef" => Map.new(constituents, &{Integer.to_string(&1), 1})}
+        }
+      ]
+    }
+
+    FakeAdapter.set(:spot_config, {:ok, body})
+    pid = start_supervised!({BlendConfig, name: nil}, id: make_ref())
+    sync(pid)
+  end
+
+  defp sync(pid), do: :sys.get_state(pid)
+
   defp stub_station_list_fixture do
     Req.Test.stub(HTTPAdapter, fn conn -> Req.Test.json(conn, @stations) end)
   end
 
-  test "forecast/2 fetches and normalizes the custom lat/lon payload" do
+  test "forecast/3 with an explicit model fetches and normalizes the custom lat/lon payload" do
     Req.Test.stub(HTTPAdapter, fn conn -> Req.Test.json(conn, @forecast_custom) end)
-    assert {:ok, %{model: "GFS 13 km", hours: [_ | _]}} = HTTPAdapter.forecast(52.36, 5.04)
+    assert {:ok, %{model: "GFS 13 km", hours: [_ | _]}} = HTTPAdapter.forecast(52.36, 5.04, 3)
   end
 
-  test "forecast/2 decodes a JSON body even when the response has a non-JSON content-type" do
+  test "forecast/3 decodes a JSON body even when the response has a non-JSON content-type" do
     System.put_env("WG_COOKIE", "langc=en; session=fake; login_md5=fake")
 
     Req.Test.stub(HTTPAdapter, fn conn ->
@@ -47,12 +100,50 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
       |> Plug.Conn.send_resp(200, File.read!("test/fixtures/windguru/forecast_custom.json"))
     end)
 
-    assert {:ok, %{model: _, hours: [_ | _]}} = HTTPAdapter.forecast(52.36, 5.04)
+    assert {:ok, %{model: _, hours: [_ | _]}} = HTTPAdapter.forecast(52.36, 5.04, 3)
   end
 
   test "station_reading/1 fetches and normalizes" do
     Req.Test.stub(HTTPAdapter, fn conn -> Req.Test.json(conn, @reading) end)
     assert {:ok, %{wind_kn: _}} = HTTPAdapter.station_reading(1234)
+  end
+
+  test "spot_config/1 fetches and returns the raw forecast_spot JSON" do
+    Req.Test.stub(HTTPAdapter, fn conn -> Req.Test.json(conn, @spot_config) end)
+    assert {:ok, %{"tabs" => [_ | _]}} = HTTPAdapter.spot_config(1_189_718)
+  end
+
+  test "spot_config/1 sends the cookie header when WG_COOKIE is set" do
+    System.put_env("WG_COOKIE", "langc=en; session=fake; login_md5=fake")
+    test_pid = self()
+
+    Req.Test.stub(HTTPAdapter, fn conn ->
+      cookie = Plug.Conn.get_req_header(conn, "cookie")
+      send(test_pid, {:cookie_header, cookie})
+      Req.Test.json(conn, @spot_config)
+    end)
+
+    assert {:ok, _} = HTTPAdapter.spot_config(1_189_718)
+    assert_received {:cookie_header, ["langc=en; session=fake; login_md5=fake"]}
+  end
+
+  test "spot_config/1 sends no cookie header when WG_COOKIE is unset" do
+    System.delete_env("WG_COOKIE")
+    test_pid = self()
+
+    Req.Test.stub(HTTPAdapter, fn conn ->
+      cookie = Plug.Conn.get_req_header(conn, "cookie")
+      send(test_pid, {:cookie_header, cookie})
+      Req.Test.json(conn, @spot_config)
+    end)
+
+    assert {:ok, _} = HTTPAdapter.spot_config(1_189_718)
+    assert_received {:cookie_header, []}
+  end
+
+  test "spot_config/1 maps a 500 to an error tuple" do
+    Req.Test.stub(HTTPAdapter, fn conn -> Plug.Conn.send_resp(conn, 500, "boom") end)
+    assert {:error, {:http_status, 500}} = HTTPAdapter.spot_config(1_189_718)
   end
 
   test "nearest_station/2 resolves nearest from the list endpoint" do
@@ -102,12 +193,12 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
     # WG_USERNAME/WG_MICRO_PASSWORD unset (this file's setup deletes both),
     # the fallback short-circuits instead of crashing or hitting the network.
     Req.Test.stub(HTTPAdapter, fn conn -> Plug.Conn.send_resp(conn, 500, "boom") end)
-    assert {:error, :micro_not_configured} = HTTPAdapter.forecast(52.36, 5.04)
+    assert {:error, :micro_not_configured} = HTTPAdapter.forecast(52.36, 5.04, 3)
   end
 
   test "non-JSON garbage falls back to micro, which errors cleanly (not a crash) when unconfigured" do
     Req.Test.stub(HTTPAdapter, fn conn -> Plug.Conn.send_resp(conn, 200, "<html>") end)
-    assert {:error, :micro_not_configured} = HTTPAdapter.forecast(52.36, 5.04)
+    assert {:error, :micro_not_configured} = HTTPAdapter.forecast(52.36, 5.04, 3)
   end
 
   test "iapi 500 falls back to micro and succeeds when micro is reachable and configured" do
@@ -123,7 +214,7 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
 
     log =
       ExUnit.CaptureLog.capture_log(fn ->
-        assert {:ok, %{model: "gfs-micro"}} = HTTPAdapter.forecast(39.92, 3.09)
+        assert {:ok, %{model: "gfs-micro"}} = HTTPAdapter.forecast(39.92, 3.09, 3)
       end)
 
     assert log =~ "micro fallback"
@@ -140,7 +231,7 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
       Plug.Conn.send_resp(conn, 401, Jason.encode!(%{"return" => "error"}))
     end)
 
-    assert {:error, :micro_not_configured} = HTTPAdapter.forecast(52.36, 5.04)
+    assert {:error, :micro_not_configured} = HTTPAdapter.forecast(52.36, 5.04, 3)
   end
 
   test "403 without WG_COOKIE set falls back to micro, which is unconfigured by default" do
@@ -150,7 +241,7 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
       Plug.Conn.send_resp(conn, 403, Jason.encode!(%{"return" => "error"}))
     end)
 
-    assert {:error, :micro_not_configured} = HTTPAdapter.forecast(52.36, 5.04)
+    assert {:error, :micro_not_configured} = HTTPAdapter.forecast(52.36, 5.04, 3)
   end
 
   test "401 with WG_COOKIE set falls back to micro, which is unconfigured by default" do
@@ -160,10 +251,10 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
       Plug.Conn.send_resp(conn, 401, Jason.encode!(%{"return" => "error"}))
     end)
 
-    assert {:error, :micro_not_configured} = HTTPAdapter.forecast(52.36, 5.04)
+    assert {:error, :micro_not_configured} = HTTPAdapter.forecast(52.36, 5.04, 3)
   end
 
-  test "forecast/2 sends the cookie header when WG_COOKIE is set" do
+  test "forecast/3 with an explicit model sends the cookie header when WG_COOKIE is set" do
     System.put_env("WG_COOKIE", "langc=en; session=fake; login_md5=fake")
     test_pid = self()
 
@@ -173,11 +264,11 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
       Req.Test.json(conn, @forecast_custom)
     end)
 
-    assert {:ok, _} = HTTPAdapter.forecast(52.36, 5.04)
+    assert {:ok, _} = HTTPAdapter.forecast(52.36, 5.04, 3)
     assert_received {:cookie_header, ["langc=en; session=fake; login_md5=fake"]}
   end
 
-  test "forecast/2 sends no cookie header when WG_COOKIE is unset" do
+  test "forecast/3 with an explicit model sends no cookie header when WG_COOKIE is unset" do
     System.delete_env("WG_COOKIE")
     test_pid = self()
 
@@ -187,11 +278,11 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
       Req.Test.json(conn, @forecast_custom)
     end)
 
-    assert {:ok, _} = HTTPAdapter.forecast(52.36, 5.04)
+    assert {:ok, _} = HTTPAdapter.forecast(52.36, 5.04, 3)
     assert_received {:cookie_header, []}
   end
 
-  test "forecast/2 sends user-agent and referer headers" do
+  test "forecast/3 with an explicit model sends user-agent and referer headers" do
     test_pid = self()
 
     Req.Test.stub(HTTPAdapter, fn conn ->
@@ -201,7 +292,7 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
       Req.Test.json(conn, @forecast_custom)
     end)
 
-    assert {:ok, _} = HTTPAdapter.forecast(52.36, 5.04)
+    assert {:ok, _} = HTTPAdapter.forecast(52.36, 5.04, 3)
     assert_received {:headers, [_ua], [_referer]}
   end
 
@@ -420,6 +511,253 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
       Req.Test.stub(HTTPAdapter, fn conn -> Req.Test.json(conn, synthetic_list) end)
 
       assert {:ok, nil} = HTTPAdapter.station_by_id(16, 0.0, 0.0)
+    end
+  end
+
+  describe "forecast/3 :wg (constituent blend + degradation ladder)" do
+    defp stub_by_id_model(handlers) do
+      Req.Test.stub(HTTPAdapter, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+        handlers.(conn, conn.query_params["id_model"])
+      end)
+    end
+
+    test "blends every stubbed constituent into a single WG-blend forecast" do
+      seed_constituents([3, 52, 104])
+
+      stub_by_id_model(fn conn, id_model ->
+        case id_model do
+          "3" -> Req.Test.json(conn, @forecast_custom)
+          "52" -> Req.Test.json(conn, @forecast_m52)
+          "104" -> Req.Test.json(conn, @forecast_m104)
+        end
+      end)
+
+      assert {:ok, %{model: "WG blend (3 models)", hours: [_ | _]}} =
+               HTTPAdapter.forecast(39.92, 3.09, :wg)
+    end
+
+    test "one constituent 500ing still blends the remainder" do
+      seed_constituents([3, 52, 104])
+
+      stub_by_id_model(fn conn, id_model ->
+        case id_model do
+          "3" -> Req.Test.json(conn, @forecast_custom)
+          "52" -> Plug.Conn.send_resp(conn, 500, "boom")
+          "104" -> Req.Test.json(conn, @forecast_m104)
+        end
+      end)
+
+      assert {:ok, %{model: "WG blend (2 models)"}} = HTTPAdapter.forecast(39.92, 3.09, :wg)
+    end
+
+    test "all but one constituent failing ladders down to model 52 (AROME)" do
+      seed_constituents([3, 52, 104])
+
+      stub_by_id_model(fn conn, id_model ->
+        case id_model do
+          "3" -> Plug.Conn.send_resp(conn, 500, "boom")
+          "104" -> Plug.Conn.send_resp(conn, 500, "boom")
+          "52" -> Req.Test.json(conn, @forecast_m52)
+        end
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{model: "AROME-FR 1.3 km"}} = HTTPAdapter.forecast(39.92, 3.09, :wg)
+        end)
+
+      assert log =~ "degrading to model 52"
+    end
+
+    test "52 also outside-grid ladders all the way down to model 3 (GFS)" do
+      seed_constituents([3, 52, 104])
+
+      stub_by_id_model(fn conn, id_model ->
+        case id_model do
+          "3" -> Req.Test.json(conn, @forecast_custom)
+          "104" -> Plug.Conn.send_resp(conn, 500, "boom")
+          "52" -> Plug.Conn.send_resp(conn, 404, @outside_grid_body)
+        end
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{model: "GFS 13 km"}} = HTTPAdapter.forecast(39.92, 3.09, :wg)
+        end)
+
+      assert log =~ "degrading to model 52"
+      assert log =~ "degrading to model 3"
+    end
+
+    test "an outside-grid constituent is marked unavailable and not re-requested on a later wg call" do
+      seed_constituents([3, 52])
+      test_pid = self()
+
+      stub_by_id_model(fn conn, id_model ->
+        case id_model do
+          "3" ->
+            Req.Test.json(conn, @forecast_custom)
+
+          "52" ->
+            send(test_pid, :model_52_hit)
+            Plug.Conn.send_resp(conn, 404, @outside_grid_body)
+        end
+      end)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, %{model: "GFS 13 km"}} = HTTPAdapter.forecast(39.92, 3.09, :wg)
+        assert {:ok, %{model: "GFS 13 km"}} = HTTPAdapter.forecast(39.92, 3.09, :wg)
+      end)
+
+      assert_received :model_52_hit
+      refute_received :model_52_hit
+    end
+
+    test "fetch spacing threads across the wg_blend -> rung-52 boundary (52 not a constituent)" do
+      # 52 is deliberately NOT a constituent here, so the rung-52 live fetch
+      # below is a genuinely new dispatch, not a cache hit from the
+      # constituent pass -- it's exactly the boundary the spacing discipline
+      # must still cover.
+      seed_constituents([3, 104])
+      Application.put_env(:stallalert, :windguru_spacing_test_hook, self())
+
+      stub_by_id_model(fn conn, id_model ->
+        case id_model do
+          "3" -> Plug.Conn.send_resp(conn, 500, "boom")
+          "104" -> Plug.Conn.send_resp(conn, 500, "boom")
+          "52" -> Req.Test.json(conn, @forecast_m52)
+        end
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{model: "AROME-FR 1.3 km"}} = HTTPAdapter.forecast(39.92, 3.09, :wg)
+        end)
+
+      assert log =~ "degrading to model 52"
+
+      # Three LIVE fetches happen total across the whole call chain
+      # (constituents 3, 104, then rung 52) -- two "gaps" between them, so
+      # two spacing events fire if and only if the accumulated spacing
+      # state threads across the wg_blend -> rung-52 boundary instead of
+      # resetting there.
+      assert length(collect_spacing_messages()) == 2
+    end
+  end
+
+  describe "forecast/3 with an explicit integer model" do
+    test "forecast(lat, lon, 104) fetches only model 104" do
+      test_pid = self()
+
+      stub_by_id_model(fn conn, id_model ->
+        send(test_pid, {:hit, id_model})
+        Req.Test.json(conn, @forecast_m104)
+      end)
+
+      assert {:ok, %{model: "ICON-2I 2.2 km"}} = HTTPAdapter.forecast(39.92, 3.09, 104)
+      assert_received {:hit, "104"}
+      refute_received {:hit, _}
+    end
+
+    # Regression for the whole-branch review's Critical #1: BlendConfig's
+    # shipped snapshot lists constituents (e.g. 45, 107, 21, 43, 59) outside
+    # the ladder's old `model in [3, 104, 117, 64]` guard, which the watch
+    # picker can surface via `available_models/2` and a user can select --
+    # `forecast_ladder/4` must accept ANY integer model id, not just the
+    # five named ones, or the async forecast task crash-loops forever for
+    # that (position, model) pair.
+    test "forecast(lat, lon, 45) -- an id outside the ladder's named clauses -- still fetches (no FunctionClauseError)" do
+      test_pid = self()
+
+      stub_by_id_model(fn conn, id_model ->
+        send(test_pid, {:hit, id_model})
+        Req.Test.json(conn, @forecast_custom)
+      end)
+
+      assert {:ok, %{model: "GFS 13 km"}} = HTTPAdapter.forecast(39.92, 3.09, 45)
+      assert_received {:hit, "45"}
+      refute_received {:hit, _}
+    end
+
+    test "clear_availability_cache/0 resets a marked-unavailable cell so it is re-requested" do
+      stub_by_id_model(fn conn, _id_model ->
+        Plug.Conn.send_resp(conn, 404, @outside_grid_body)
+      end)
+
+      assert {:error, _} = HTTPAdapter.forecast(39.92, 3.09, 104)
+
+      HTTPAdapter.clear_availability_cache()
+
+      test_pid = self()
+
+      stub_by_id_model(fn conn, id_model ->
+        send(test_pid, {:hit, id_model})
+        Req.Test.json(conn, @forecast_m104)
+      end)
+
+      assert {:ok, %{model: "ICON-2I 2.2 km"}} = HTTPAdapter.forecast(39.92, 3.09, 104)
+      assert_received {:hit, "104"}
+    end
+  end
+
+  describe "available_models/2" do
+    test "lists wg first, then named constituents, excluding cell-unavailable models" do
+      seed_constituents([3, 52, 104, 999])
+
+      stub_by_id_model(fn conn, id_model ->
+        case id_model do
+          "52" -> Plug.Conn.send_resp(conn, 404, @outside_grid_body)
+          _ -> Plug.Conn.send_resp(conn, 500, "boom")
+        end
+      end)
+
+      # Mark 52 unavailable for this cell via a real (stubbed) outside-grid
+      # fetch, exactly as it would happen in production.
+      ExUnit.CaptureLog.capture_log(fn ->
+        HTTPAdapter.forecast(39.92, 3.09, 52)
+      end)
+
+      assert {:ok, models} = HTTPAdapter.available_models(39.92, 3.09)
+
+      assert models == [
+               %{id: "wg", name: "WG blend"},
+               %{id: "3", name: "GFS 13 km"},
+               %{id: "104", name: "ICON-2I 2.2 km"}
+             ]
+    end
+
+    # Regression for Critical #1: BlendConfig's real snapshot includes
+    # constituents with no `@model_names` entry (e.g. 45). Those must never
+    # surface as selectable "Model <id>" picker rows -- filtering them out
+    # here is the second half of the defense (the first is the ladder no
+    # longer crashing on them at all).
+    test "excludes constituents with no @model_names entry entirely (no 'Model <id>' fallback rows)" do
+      seed_constituents([3, 45, 104])
+
+      assert {:ok, models} = HTTPAdapter.available_models(39.92, 3.09)
+
+      assert models == [
+               %{id: "wg", name: "WG blend"},
+               %{id: "3", name: "GFS 13 km"},
+               %{id: "104", name: "ICON-2I 2.2 km"}
+             ]
+
+      refute Enum.any?(models, &(&1.id == "45"))
+    end
+  end
+
+  describe "FakeAdapter.available_models/2" do
+    test "defaults to a healthy wg + AROME + GFS list, and is settable like the other callbacks" do
+      assert {:ok,
+              [
+                %{id: "wg", name: "WG blend"},
+                %{id: "52", name: "AROME-FR 1.3 km"},
+                %{id: "3", name: "GFS 13 km"}
+              ]} = FakeAdapter.available_models(39.92, 3.09)
+
+      FakeAdapter.set(:available_models, {:error, :boom})
+      assert {:error, :boom} = FakeAdapter.available_models(39.92, 3.09)
     end
   end
 end

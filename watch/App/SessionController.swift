@@ -19,6 +19,8 @@ final class SessionController: NSObject {
     private(set) var lastError: String?
     private(set) var nearbyStations: [NearbyStation] = []
     private(set) var manualStationActive = false
+    private(set) var availableModels: [AvailableModel] = []
+    private(set) var servedModelCaption: String?
     var settings = Settings.load(defaults: .standard, secrets: KeychainStore())
 
     private let healthStore = HKHealthStore()
@@ -127,13 +129,16 @@ final class SessionController: NSObject {
         guard let provider else { return }
         guard let loc = locationManager.location else { return }
         let override = overrideStore.override(nearLat: loc.coordinate.latitude, lon: loc.coordinate.longitude)
+        let requestedModel = settings.forecastModel == "wg" ? nil : settings.forecastModel
         do {
-            let c = try await provider.fetch(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude, stationID: override?.stationID)
+            let c = try await provider.fetch(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude, stationID: override?.stationID, model: requestedModel)
             conditions = c
             activeSource = await provider.activeSource
             lastError = nil
             nearbyStations = c.nearbyStations ?? []
             manualStationActive = (override != nil) && (c.station?.source == "manual")
+            availableModels = c.availableModels ?? []
+            servedModelCaption = Self.servedModelCaption(requested: settings.forecastModel, served: c.forecast.model, availableModels: availableModels)
             evaluateAndMaybeFire()
         } catch ProviderError.unauthorized {
             switch await provider.activeSource {
@@ -197,5 +202,24 @@ final class SessionController: NSObject {
             phase = .alerting(cause)
             presenter.fire()
         }
+    }
+
+    /// Rule: nil (no caption) when the served forecast matches what was requested —
+    /// "wg" requested + served name starts with "WG blend", or a specific model id
+    /// requested + served name equals that id's display name from `availableModels`.
+    /// Otherwise the caption is the raw served model string.
+    ///
+    /// Important: right after switching models, the async server may still serve the
+    /// PREVIOUS model's last-good forecast for a tick or two while the new one is
+    /// fetched (`requestedModel` echoes the new request but `forecast.model` lags
+    /// behind it). Showing that old served name here during the gap is CORRECT — the
+    /// caption reflects what's actually on screen, not what was asked for. Do not add
+    /// suppression/debounce logic to hide this window.
+    private static func servedModelCaption(requested: String, served: String, availableModels: [AvailableModel]) -> String? {
+        if requested == "wg" {
+            return served.hasPrefix("WG blend") ? nil : served
+        }
+        let requestedName = availableModels.first(where: { $0.id == requested })?.name
+        return served == requestedName ? nil : served
     }
 }

@@ -32,6 +32,33 @@ final class ServiceClientTests: XCTestCase {
         XCTAssertEqual(c.station?.name, "Ijburg")
     }
 
+    func testFetchIncludesModelWhenSet() async throws {
+        StubURLProtocol.handler = { req in
+            XCTAssertTrue(req.url!.query!.contains("model=52"))
+            return (200, self.fixture)
+        }
+        let c = try await client().fetch(lat: 52.36, lon: 5.04, stationID: nil, model: "52")
+        XCTAssertEqual(c.station?.name, "Ijburg")
+    }
+
+    func testFetchOmitsModelWhenNil() async throws {
+        StubURLProtocol.handler = { req in
+            XCTAssertFalse(req.url!.query!.contains("model"))
+            return (200, self.fixture)
+        }
+        let c = try await client().fetch(lat: 52.36, lon: 5.04, stationID: nil, model: nil)
+        XCTAssertEqual(c.station?.name, "Ijburg")
+    }
+
+    func testFetchOmitsModelWhenWg() async throws {
+        StubURLProtocol.handler = { req in
+            XCTAssertFalse(req.url!.query!.contains("model"))
+            return (200, self.fixture)
+        }
+        let c = try await client().fetch(lat: 52.36, lon: 5.04, stationID: nil, model: "wg")
+        XCTAssertEqual(c.station?.name, "Ijburg")
+    }
+
     func testUnauthorizedMapsToUnauthorized() async {
         StubURLProtocol.handler = { _ in (401, Data()) }
         do { _ = try await client().fetch(lat: 1, lon: 1); XCTFail("should throw") }

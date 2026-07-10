@@ -107,3 +107,14 @@ review and verify specific decisions.
       the past hour); they fade as the session progresses.
 - [ ] Stale reading (> 20 min): the whole dial grays out with the numbers.
 - [ ] Direct-fallback mode (server stopped): compass + shadows still render.
+
+## Forecast source / WG blend (added 2026-07-10)
+- [ ] Default session: NEXT HOUR shows no model caption; server logs show
+      constituent fetches; compare blend numbers vs windguru.cz's WG tab
+      for the home spot (close, not identical, is expected).
+- [ ] Settings → Forecast source → pick AROME-FR → forecast refreshes;
+      no caption (served == requested).
+- [ ] Force degradation: pick WG blend, then (server-side) stop after
+      cookie expiry or observe during a constituent outage → caption shows
+      the served model (e.g. "AROME-FR 1.3 km"). Alerts keep working.
+- [ ] Direct-fallback mode: forecast label reads gfs-micro; caption shows it.

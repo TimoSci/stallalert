@@ -20,6 +20,9 @@ struct SessionView: View {
                         }
                     }
                 }
+                if let cap = session.servedModelCaption {
+                    Text(cap).font(.caption2).foregroundStyle(.secondary)
+                }
 
                 if let st = session.conditions?.station, let r = st.reading {
                     Button {

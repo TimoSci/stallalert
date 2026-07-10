@@ -1,10 +1,14 @@
 public protocol WindDataProvider: Sendable {
-    func fetch(lat: Double, lon: Double, stationID: Int?) async throws -> Conditions
+    func fetch(lat: Double, lon: Double, stationID: Int?, model: String?) async throws -> Conditions
 }
 
 public extension WindDataProvider {
     func fetch(lat: Double, lon: Double) async throws -> Conditions {
-        try await fetch(lat: lat, lon: lon, stationID: nil)
+        try await fetch(lat: lat, lon: lon, stationID: nil, model: nil)
+    }
+
+    func fetch(lat: Double, lon: Double, stationID: Int?) async throws -> Conditions {
+        try await fetch(lat: lat, lon: lon, stationID: stationID, model: nil)
     }
 }
 

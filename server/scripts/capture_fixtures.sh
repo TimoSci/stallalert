@@ -179,3 +179,66 @@ curl -sf \
 echo "Fixtures written to $DIR"
 echo "REMEMBER: grep new fixtures for session/login_md5/deviceid/idu/tokens/username" \
      "before committing (see docs/windguru-api-notes.md, Sanitization)."
+
+# --- Blend fixtures: spot config + constituent forecasts (2026-07-10) --
+
+# --- 6. Spot config (koef table source; cookie required) ---------------
+echo "blend 1/5: spot forecast_spot config..."
+curl -sf \
+  -H "Referer: https://www.windguru.cz/1189718" \
+  -H "User-Agent: $WG_UA" \
+  -b "$WG_COOKIE" \
+  "https://www.windguru.cz/int/iapi.php?q=forecast_spot&id_spot=1189718" \
+  | python3 -m json.tool > "$DIR/forecast_spot.json"
+sleep_between
+
+# --- 7-10. Blend constituent forecasts at 39.92/3.09 (cookie required) -
+# id_model=3 (GFS 13 km) is already captured above as forecast_custom.json.
+i=2
+for m in 117 52 104 64; do
+  echo "blend ${i}/5: constituent forecast id_model=${m}..."
+  i=$((i + 1))
+  curl -sf \
+    -H "Referer: https://www.windguru.cz/?lat=39.92&lon=3.09" \
+    -H "User-Agent: $WG_UA" \
+    -b "$WG_COOKIE" \
+    "https://www.windguru.cz/int/iapi.php?q=forecast&id_model=${m}&lat=39.92&lon=3.09" \
+    | python3 -m json.tool > "$DIR/forecast_m${m}.json"
+  sleep_between
+done
+
+# koef snapshot 2026-07-10
+#
+# Captured from server/test/fixtures/windguru/forecast_spot.json, tabs[0]
+# (the WG tab, id_model=100, spot 1189718). Values recorded verbatim so
+# Task 2 can hardcode its constituent-blend fallback from this snapshot
+# without re-parsing the fixture.
+#
+# id_model_wave: 84 (wave model, excluded from wind blending)
+#
+# id_model_arr (WG tab's full constituent list, includes regional models
+# not necessarily servable at every custom lat/lon):
+#   3, 117, 52, 107, 104, 64, 21, 43, 45, 59, 84
+#
+# blend.model_koef for the above ids (id_model -> koef; 1 = full weight):
+#   3   -> 1
+#   117 -> 1
+#   52  -> 1
+#   107 -> 1
+#   104 -> 1
+#   64  -> 1
+#   21  -> 1
+#   43  -> 1
+#   45  -> 0.9
+#   59  -> 0.7
+#   84  -> (no entry in model_koef; wave model, not wind-blended)
+#
+# Constituents actually confirmed serving custom coords 39.92/3.09 (the 5
+# fetched by this script; the other id_model_arr entries -- 107, 21, 43,
+# 45, 59 -- were NOT probed for this location and may return "outside
+# grid"; see docs/windguru-api-notes.md, "WG model findings"):
+#   forecast_custom.json  id_model=3   GFS 13 km        koef=1   steps=179
+#   forecast_m117.json    id_model=117 IFS-HRES 9 km    koef=1   steps=145
+#   forecast_m52.json     id_model=52  AROME-FR 1.3 km  koef=1   steps=51
+#   forecast_m104.json    id_model=104 ICON-2I 2.2 km   koef=1   steps=73
+#   forecast_m64.json     id_model=64  Zephr-HD 2.6 km  koef=1   steps=75

@@ -11,11 +11,16 @@ public final class ServiceClient: WindDataProvider, HealthCheckable {
         self.session = session
     }
 
-    public func fetch(lat: Double, lon: Double, stationID: Int?) async throws -> Conditions {
+    public func fetch(lat: Double, lon: Double, stationID: Int?, model: String?) async throws -> Conditions {
         var comps = URLComponents(url: baseURL.appending(path: "/v1/conditions"), resolvingAgainstBaseURL: false)!
         var queryItems = [URLQueryItem(name: "lat", value: String(lat)), URLQueryItem(name: "lon", value: String(lon))]
         if let stationID {
             queryItems.append(URLQueryItem(name: "station_id", value: String(stationID)))
+        }
+        // "wg" is the server's own default model, so omitting it keeps the
+        // URL clean for the common case; only a non-default override is sent.
+        if let model, model != "wg" {
+            queryItems.append(URLQueryItem(name: "model", value: model))
         }
         comps.queryItems = queryItems
         var req = URLRequest(url: comps.url!, timeoutInterval: 5)

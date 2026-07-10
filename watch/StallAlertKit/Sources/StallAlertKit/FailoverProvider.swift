@@ -9,20 +9,20 @@ public actor FailoverProvider: WindDataProvider {
         self.service = service; self.direct = direct
     }
 
-    public func fetch(lat: Double, lon: Double, stationID: Int?) async throws -> Conditions {
+    public func fetch(lat: Double, lon: Double, stationID: Int?, model: String?) async throws -> Conditions {
         if activeSource == .direct, await service.isHealthy() {
             activeSource = .service
         }
 
         if activeSource == .service {
             do {
-                return try await service.fetch(lat: lat, lon: lon, stationID: stationID)
+                return try await service.fetch(lat: lat, lon: lon, stationID: stationID, model: model)
             } catch ProviderError.unauthorized {
                 throw ProviderError.unauthorized
             } catch {
                 activeSource = .direct
             }
         }
-        return try await direct.fetch(lat: lat, lon: lon, stationID: stationID)
+        return try await direct.fetch(lat: lat, lon: lon, stationID: stationID, model: model)
     }
 }
