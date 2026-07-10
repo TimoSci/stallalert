@@ -24,6 +24,25 @@
   `KEY=value`-per-line file for `docker --env-file`; do NOT `source` it in a
   shell (the unquoted `WG_COOKIE` breaks shell parsing).
 
+## Standard redeploy (existing host)
+
+Day-to-day updates use `redeploy-server.sh` (repo root). One-time setup —
+copy the script to the server home directory:
+```bash
+scp redeploy-server.sh stallalert@51.255.64.127:~/
+```
+Then every deploy is:
+```bash
+rsync -a --exclude '.git' --exclude '_build' --exclude 'deps' \
+  ~/Documents/code/stallalert/server/ stallalert@51.255.64.127:~/stallalert/server/
+ssh stallalert@51.255.64.127 ./redeploy-server.sh
+```
+The script rebuilds the image, replaces the container (tolerating a missing
+one on first run), and curls `127.0.0.1:4000/v1/health` — it ends with
+`deploy OK` on success. Re-copy the script via `scp` whenever it changes.
+
+The sections below document the underlying pieces for a fresh host.
+
 ## Prerequisites
 - A host with a fixed IP, Docker, and ports 80/443 open.
 - A DNS A record pointing your chosen hostname at the fixed IP (this
@@ -102,10 +121,19 @@ curl -H "Authorization: Bearer $API_TOKEN" \
 curl -H "Authorization: Bearer $API_TOKEN" \
   "https://stallalert.com/v1/conditions?lat=39.92&lon=3.09&station_id=<id from nearby_stations>"
 # -> station.source == "manual" (station override honored)
+
+curl -H "Authorization: Bearer $API_TOKEN" \
+  "https://stallalert.com/v1/conditions?lat=39.92&lon=3.09&model=52"
+# -> requested_model == "52", available_models listed, and (once warm)
+#    forecast.model == "AROME-FR 1.3 km". Default (no model param) serves
+#    the WG blend: forecast.model == "WG blend (N models)". A cold blend
+#    can take a couple of minutes to warm (constituents fetch with polite
+#    spacing); until then the endpoint replies immediately from last-good
+#    data or with a no_data error rather than blocking.
 ```
 
 ## Updating (e.g. after a Windguru format change)
-Rebuild the image, `docker stop` + rerun. The watch app needs no update.
+Run the standard redeploy above. The watch app needs no update.
 
 ## Smoke-testing locally
 Before deploying, confirm the image works locally:
