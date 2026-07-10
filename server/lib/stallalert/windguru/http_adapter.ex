@@ -169,7 +169,7 @@ defmodule Stallalert.Windguru.HTTPAdapter do
   cell. Names come from `@model_names`; an unmapped constituent id falls
   back to `"Model <id>"`.
   """
-  @spec available_models(float, float) :: {:ok, [%{id: String.t(), name: String.t()}]}
+  @impl true
   def available_models(lat, lon) do
     cell = cell(lat, lon)
     %{constituents: constituents} = BlendConfig.weights()
@@ -188,10 +188,24 @@ defmodule Stallalert.Windguru.HTTPAdapter do
   # requested integer model is a single-shot fetch with no further ladder
   # step (nothing more specific to fall back to). Each transition logs
   # exactly one warning before trying the next rung.
-  defp forecast_ladder(lat, lon, :wg) do
-    case wg_blend(lat, lon) do
+  #
+  # The fetch-spacing accumulator (`spacing_state`) is threaded through the
+  # whole recursion -- every rung both accepts and returns it -- so a live
+  # dispatch at a rung boundary (e.g. a fresh `52` fetch right after the
+  # `:wg` constituent pass) is still spaced from whatever LIVE fetch came
+  # immediately before it, instead of starting each rung as if it were the
+  # first fetch of the call.
+  defp forecast_ladder(lat, lon, model) do
+    {result, _spacing_state} = forecast_ladder(lat, lon, model, initial_spacing_state())
+    result
+  end
+
+  defp forecast_ladder(lat, lon, :wg, spacing_state) do
+    {blend_result, spacing_state} = wg_blend(lat, lon, spacing_state)
+
+    case blend_result do
       {:ok, _forecast} = ok ->
-        ok
+        {ok, spacing_state}
 
       {:error, reason} ->
         Logger.warning(
@@ -199,16 +213,16 @@ defmodule Stallalert.Windguru.HTTPAdapter do
             "degrading to model 52 (AROME-FR 1.3 km)"
         )
 
-        forecast_ladder(lat, lon, 52)
+        forecast_ladder(lat, lon, 52, spacing_state)
     end
   end
 
-  defp forecast_ladder(lat, lon, 52) do
-    {result, _spacing_state} = fetch_cached(lat, lon, 52, initial_spacing_state())
+  defp forecast_ladder(lat, lon, 52, spacing_state) do
+    {result, spacing_state} = fetch_cached(lat, lon, 52, spacing_state)
 
     case result do
       {:ok, _forecast} = ok ->
-        ok
+        {ok, spacing_state}
 
       {:error, reason} ->
         Logger.warning(
@@ -216,13 +230,12 @@ defmodule Stallalert.Windguru.HTTPAdapter do
             "(#{inspect(reason)}); degrading to model 3 (GFS 13 km)"
         )
 
-        forecast_ladder(lat, lon, 3)
+        forecast_ladder(lat, lon, 3, spacing_state)
     end
   end
 
-  defp forecast_ladder(lat, lon, model) when model in [3, 104, 117, 64] do
-    {result, _spacing_state} = fetch_cached(lat, lon, model, initial_spacing_state())
-    result
+  defp forecast_ladder(lat, lon, model, spacing_state) when model in [3, 104, 117, 64] do
+    fetch_cached(lat, lon, model, spacing_state)
   end
 
   # Fetches every currently-fetchable WG-blend constituent (per
@@ -230,12 +243,15 @@ defmodule Stallalert.Windguru.HTTPAdapter do
   # models -- enforced inside `fetch_cached/4`, which short-circuits
   # without an HTTP call for a model already known unavailable here) and
   # blends whatever succeeds. `Blend.blend/3` itself requires >= 2
-  # successful constituents to produce a result.
-  defp wg_blend(lat, lon) do
+  # successful constituents to produce a result. Returns the accumulated
+  # `spacing_state` alongside the blend result so a subsequent ladder rung
+  # (see `forecast_ladder/4`) can keep spacing its own live fetch from the
+  # last one dispatched here.
+  defp wg_blend(lat, lon, spacing_state) do
     %{constituents: constituents, koef: koef} = BlendConfig.weights()
 
-    {results, _spacing_state} =
-      Enum.map_reduce(constituents, initial_spacing_state(), fn model, spacing_state ->
+    {results, spacing_state} =
+      Enum.map_reduce(constituents, spacing_state, fn model, spacing_state ->
         {result, spacing_state} = fetch_cached(lat, lon, model, spacing_state)
         {{model, result}, spacing_state}
       end)
@@ -245,7 +261,7 @@ defmodule Stallalert.Windguru.HTTPAdapter do
       |> Enum.filter(fn {_model, result} -> match?({:ok, _}, result) end)
       |> Enum.map(fn {model, {:ok, forecast}} -> {model, forecast} end)
 
-    Blend.blend(forecasts, koef, DateTime.utc_now())
+    {Blend.blend(forecasts, koef, DateTime.utc_now()), spacing_state}
   end
 
   defp initial_spacing_state, do: %{live_fetched?: false}
@@ -281,7 +297,9 @@ defmodule Stallalert.Windguru.HTTPAdapter do
   end
 
   defp maybe_sleep(%{live_fetched?: true} = spacing_state) do
-    Process.sleep(fetch_spacing_ms())
+    ms = fetch_spacing_ms()
+    notify_spacing_test_hook(ms)
+    Process.sleep(ms)
     spacing_state
   end
 
@@ -289,6 +307,20 @@ defmodule Stallalert.Windguru.HTTPAdapter do
 
   defp fetch_spacing_ms,
     do: Application.get_env(:stallalert, :windguru_fetch_spacing_ms, @default_fetch_spacing_ms)
+
+  # Test-only hook: when `windguru_spacing_test_hook` is set (to a pid) in
+  # app env, every spacing sleep sends `{:spacing_applied, ms}` to it first.
+  # Lets tests structurally prove the fetch-spacing accumulator threads
+  # across the ladder (see http_adapter_test.exs) without depending on wall-
+  # clock timing -- `windguru_fetch_spacing_ms` is 0 in test config, so
+  # timing alone can't distinguish "spaced" from "not spaced". Unset in
+  # every non-test env; a no-op there.
+  defp notify_spacing_test_hook(ms) do
+    case Application.get_env(:stallalert, :windguru_spacing_test_hook) do
+      nil -> :ok
+      pid -> send(pid, {:spacing_applied, ms})
+    end
+  end
 
   # A single, uncached live fetch for one model. Marks the (cell, model)
   # pair unavailable when Windguru reports it as outside the model's grid.

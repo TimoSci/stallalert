@@ -19,6 +19,7 @@ defmodule Stallalert.FakeAdapter do
     :persistent_term.erase({__MODULE__, :stations_near})
     :persistent_term.erase({__MODULE__, :station_by_id})
     :persistent_term.erase({__MODULE__, :spot_config})
+    :persistent_term.erase({__MODULE__, :available_models})
     :ok
   end
 
@@ -98,5 +99,18 @@ defmodule Stallalert.FakeAdapter do
   @impl true
   def spot_config(_id_spot) do
     get_resp(:spot_config, {:ok, @spot_config_fixture})
+  end
+
+  @impl true
+  def available_models(_lat, _lon) do
+    get_resp(
+      :available_models,
+      {:ok,
+       [
+         %{id: "wg", name: "WG blend"},
+         %{id: "52", name: "AROME-FR 1.3 km"},
+         %{id: "3", name: "GFS 13 km"}
+       ]}
+    )
   end
 end

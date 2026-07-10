@@ -36,6 +36,7 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
       HTTPAdapter.clear_forecast_cache()
       HTTPAdapter.clear_availability_cache()
       BlendConfig.clear_cache()
+      Application.delete_env(:stallalert, :windguru_spacing_test_hook)
 
       Enum.each(originals, fn
         {var, nil} -> System.delete_env(var)
@@ -44,6 +45,17 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
     end)
 
     :ok
+  end
+
+  # Drains every `{:spacing_applied, ms}` message currently in the mailbox
+  # (see `HTTPAdapter`'s test-only spacing hook, armed via
+  # `windguru_spacing_test_hook`), in receive order.
+  defp collect_spacing_messages(acc \\ []) do
+    receive do
+      {:spacing_applied, ms} -> collect_spacing_messages([ms | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
   end
 
   # Seeds `BlendConfig.weights/0` (a global persistent_term-backed cache,
@@ -601,6 +613,37 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
       assert_received :model_52_hit
       refute_received :model_52_hit
     end
+
+    test "fetch spacing threads across the wg_blend -> rung-52 boundary (52 not a constituent)" do
+      # 52 is deliberately NOT a constituent here, so the rung-52 live fetch
+      # below is a genuinely new dispatch, not a cache hit from the
+      # constituent pass -- it's exactly the boundary the spacing discipline
+      # must still cover.
+      seed_constituents([3, 104])
+      Application.put_env(:stallalert, :windguru_spacing_test_hook, self())
+
+      stub_by_id_model(fn conn, id_model ->
+        case id_model do
+          "3" -> Plug.Conn.send_resp(conn, 500, "boom")
+          "104" -> Plug.Conn.send_resp(conn, 500, "boom")
+          "52" -> Req.Test.json(conn, @forecast_m52)
+        end
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{model: "AROME-FR 1.3 km"}} = HTTPAdapter.forecast(39.92, 3.09, :wg)
+        end)
+
+      assert log =~ "degrading to model 52"
+
+      # Three LIVE fetches happen total across the whole call chain
+      # (constituents 3, 104, then rung 52) -- two "gaps" between them, so
+      # two spacing events fire if and only if the accumulated spacing
+      # state threads across the wg_blend -> rung-52 boundary instead of
+      # resetting there.
+      assert length(collect_spacing_messages()) == 2
+    end
   end
 
   describe "forecast/3 with an explicit integer model" do
@@ -663,6 +706,20 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
                %{id: "104", name: "ICON-2I 2.2 km"},
                %{id: "999", name: "Model 999"}
              ]
+    end
+  end
+
+  describe "FakeAdapter.available_models/2" do
+    test "defaults to a healthy wg + AROME + GFS list, and is settable like the other callbacks" do
+      assert {:ok,
+              [
+                %{id: "wg", name: "WG blend"},
+                %{id: "52", name: "AROME-FR 1.3 km"},
+                %{id: "3", name: "GFS 13 km"}
+              ]} = FakeAdapter.available_models(39.92, 3.09)
+
+      FakeAdapter.set(:available_models, {:error, :boom})
+      assert {:error, :boom} = FakeAdapter.available_models(39.92, 3.09)
     end
   end
 end
