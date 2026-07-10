@@ -23,14 +23,16 @@ defmodule Stallalert.FakeAdapter do
   end
 
   @impl true
-  def forecast(_lat, _lon) do
-    get_resp(:forecast, {:ok, default_forecast()})
+  def forecast(_lat, _lon, model \\ :wg) do
+    get_resp(:forecast, {:ok, default_forecast(model)})
   end
 
   # Hours are generated relative to "now" (rather than a fixed timestamp) so
   # the router's now-1h..+12-steps trimming always has data to work with,
-  # regardless of when the suite runs.
-  defp default_forecast do
+  # regardless of when the suite runs. `model` is echoed verbatim (as a
+  # string) into the `model` field so Conditions/router tests can assert
+  # which model was requested (`:wg` -> "wg", `52` -> "52", ...).
+  defp default_forecast(model) do
     now = DateTime.utc_now()
 
     hours =
@@ -43,7 +45,7 @@ defmodule Stallalert.FakeAdapter do
         }
       end
 
-    %{model: "wg", init_time: DateTime.add(now, -4 * 3600, :second), hours: hours}
+    %{model: to_string(model), init_time: DateTime.add(now, -4 * 3600, :second), hours: hours}
   end
 
   @impl true

@@ -1,5 +1,6 @@
 defmodule Stallalert.Windguru.Adapter do
-  @callback forecast(lat :: float, lon :: float) :: {:ok, map} | {:error, term}
+  @callback forecast(lat :: float, lon :: float, model :: :wg | 3 | 52 | 104 | 117 | 64) ::
+              {:ok, map} | {:error, term}
   @callback nearest_station(lat :: float, lon :: float) ::
               {:ok, %{id: integer, name: String.t(), distance_km: float}}
               | {:ok, nil}
