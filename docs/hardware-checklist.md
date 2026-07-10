@@ -118,3 +118,15 @@ review and verify specific decisions.
       cookie expiry or observe during a constituent outage → caption shows
       the served model (e.g. "AROME-FR 1.3 km"). Alerts keep working.
 - [ ] Direct-fallback mode: forecast label reads gfs-micro; caption shows it.
+
+## Tap-to-refresh + freshness indicator (added 2026-07-10)
+- [ ] Tapping the wind numbers or the "updated n min ago" line clicks
+      (haptic) and refreshes; the line dims while the fetch is in flight.
+- [ ] Tapping the station-name row still opens the station picker.
+- [ ] Right after a new station sample the age text is greyish-green; it
+      is back to plain gray within ~5 min of no newer sample.
+- [ ] The `<` marker sits near the `|` when fresh and reaches the right
+      edge at ~15 min without a newer sample, where it becomes a clock
+      symbol.
+- [ ] With the auto-refresh healthy (5-min cadence) the marker never gets
+      far past ~1/3 of the track.
