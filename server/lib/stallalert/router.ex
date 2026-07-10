@@ -17,8 +17,11 @@ defmodule Stallalert.Router do
     with {lat, ""} <- Float.parse(conn.query_params["lat"] || ""),
          {lon, ""} <- Float.parse(conn.query_params["lon"] || "") do
       station_id = parse_station_id(conn.query_params["station_id"])
+      model = parse_model(conn.query_params["model"])
 
-      case Stallalert.Conditions.get(Stallalert.Conditions, lat, lon, station_id: station_id) do
+      opts = [station_id: station_id, model: model]
+
+      case Stallalert.Conditions.get(Stallalert.Conditions, lat, lon, opts) do
         {:ok, payload} -> json(conn, 200, serialize(payload))
         {:error, :no_data} -> json(conn, 503, %{error: "no data available yet"})
       end
@@ -47,6 +50,21 @@ defmodule Stallalert.Router do
     end
   end
 
+  # `Stallalert.Conditions` is the one that maps a model descriptor string
+  # to the adapter's actual `:wg | integer` arg; the router's job is just
+  # to pass through a recognizable descriptor (or default/normalize to
+  # "wg" for anything else -- missing, empty, or non-numeric non-"wg").
+  defp parse_model(nil), do: "wg"
+  defp parse_model(""), do: "wg"
+  defp parse_model("wg"), do: "wg"
+
+  defp parse_model(value) do
+    case Integer.parse(value) do
+      {_, ""} -> value
+      _ -> "wg"
+    end
+  end
+
   defp serialize(payload) do
     cutoff = DateTime.add(DateTime.utc_now(), -3600, :second)
 
@@ -60,7 +78,9 @@ defmodule Stallalert.Router do
       stale: payload.stale,
       forecast: %{payload.forecast | hours: hours},
       station: payload.station,
-      nearby_stations: payload.nearby_stations
+      nearby_stations: payload.nearby_stations,
+      requested_model: payload.requested_model,
+      available_models: payload.available_models
     }
   end
 end

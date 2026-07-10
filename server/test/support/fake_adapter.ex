@@ -20,13 +20,48 @@ defmodule Stallalert.FakeAdapter do
     :persistent_term.erase({__MODULE__, :station_by_id})
     :persistent_term.erase({__MODULE__, :spot_config})
     :persistent_term.erase({__MODULE__, :available_models})
+    :persistent_term.erase({__MODULE__, :forecast_calls})
     :ok
   end
 
+  # Test-only call counter: `Conditions`'s forecast leg now runs in a
+  # background `Task`, so tests can't just count synchronous return values
+  # to prove in-flight dedup -- they need to observe how many times the
+  # adapter itself was actually invoked. Non-atomic read-then-write is fine
+  # here: dedup is proven by the *caller* (`Conditions`) never starting a
+  # second concurrent task for the same target, so these increments are
+  # never actually concurrent with each other in the tests that use this.
+  #
+  # `set(:forecast, {:block, test_pid})` puts `forecast/3` into a
+  # deterministic rendezvous mode instead of returning immediately: it
+  # sends `{:fake_adapter_forecast_started, self(), ref, model}` to
+  # `test_pid` (running inside `Conditions`'s background `Task`, so
+  # `self()` there is the task's pid) and then blocks until the test sends
+  # `{:fake_adapter_forecast_release, ref, response}` back. This lets a
+  # test pin down "fetch has started but not yet completed" without racing
+  # real scheduling -- needed to prove a stale in-flight completion (one
+  # answering a since-superseded position/model) is discarded.
   @impl true
   def forecast(_lat, _lon, model \\ :wg) do
-    get_resp(:forecast, {:ok, default_forecast(model)})
+    bump(:forecast_calls)
+
+    case get_resp(:forecast, {:ok, default_forecast(model)}) do
+      {:block, test_pid} ->
+        ref = make_ref()
+        send(test_pid, {:fake_adapter_forecast_started, self(), ref, model})
+
+        receive do
+          {:fake_adapter_forecast_release, ^ref, response} -> response
+        end
+
+      other ->
+        other
+    end
   end
+
+  def forecast_calls, do: get_resp(:forecast_calls, 0)
+
+  defp bump(key), do: :persistent_term.put({__MODULE__, key}, get_resp(key, 0) + 1)
 
   # Hours are generated relative to "now" (rather than a fixed timestamp) so
   # the router's now-1h..+12-steps trimming always has data to work with,

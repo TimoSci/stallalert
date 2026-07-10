@@ -11,6 +11,31 @@ defmodule Stallalert.RouterTest do
     :ok
   end
 
+  # `Stallalert.Conditions`'s forecast leg is fetched by a background `Task`
+  # (see its moduledoc), so a cold slot (no forecast cached yet for this
+  # position+model combination) answers 503 on the first hit while it
+  # refreshes in the background. These router tests share ONE global
+  # `Stallalert.Conditions` singleton (started by the application, not a
+  # fresh per-test instance), so warm it up once here before any test
+  # depends on a 200 -- everything after that serves from cache within TTL.
+  setup_all do
+    eventually(fn -> authed_get("/v1/conditions?lat=52.36&lon=5.04").status == 200 end)
+    :ok
+  end
+
+  defp eventually(pred, tries \\ 200) do
+    if pred.() do
+      :ok
+    else
+      if tries > 0 do
+        Process.sleep(5)
+        eventually(pred, tries - 1)
+      else
+        flunk("condition never became true")
+      end
+    end
+  end
+
   test "GET /v1/health returns 200 ok without auth" do
     conn = conn(:get, "/v1/health") |> Stallalert.Router.call(@opts)
     assert conn.status == 200
@@ -44,6 +69,17 @@ defmodule Stallalert.RouterTest do
     end
 
     test "200 with normalized payload" do
+      # This suite shares ONE global `Stallalert.Conditions` singleton
+      # across every test (see `setup_all` above), and other tests in this
+      # file switch its cached model -- so make sure "wg" is the one
+      # actually being served (not merely 200 with stale last-good data
+      # for whatever model a sibling test last requested) before asserting
+      # on its content.
+      eventually(fn ->
+        body = Jason.decode!(authed_get("/v1/conditions?lat=52.36&lon=5.04").resp_body)
+        body["forecast"]["model"] == "wg"
+      end)
+
       conn = authed_get("/v1/conditions?lat=52.36&lon=5.04")
       assert conn.status == 200
       body = Jason.decode!(conn.resp_body)
@@ -72,6 +108,43 @@ defmodule Stallalert.RouterTest do
       conn = authed_get("/v1/conditions?lat=52.36&lon=5.04")
       body = Jason.decode!(conn.resp_body)
       assert [%{"id" => _, "name" => _, "distance_km" => _} | _] = body["nearby_stations"]
+    end
+
+    test "payload includes requested_model and available_models on the wire" do
+      body = Jason.decode!(authed_get("/v1/conditions?lat=52.36&lon=5.04").resp_body)
+      assert body["requested_model"] == "wg"
+
+      assert [%{"id" => _, "name" => _} | _] = body["available_models"]
+      assert Enum.any?(body["available_models"], &(&1["id"] == "wg"))
+    end
+
+    test "model param is honored and echoed once its background fetch lands" do
+      eventually(fn ->
+        body = Jason.decode!(authed_get("/v1/conditions?lat=52.36&lon=5.04&model=52").resp_body)
+        body["requested_model"] == "52" and body["forecast"]["model"] == "52"
+      end)
+
+      body = Jason.decode!(authed_get("/v1/conditions?lat=52.36&lon=5.04&model=52").resp_body)
+      assert body["requested_model"] == "52"
+      assert body["forecast"]["model"] == "52"
+    end
+
+    test "an unrecognized model param defaults to wg" do
+      # Not a "wg"/numeric descriptor -> the router normalizes it to "wg"
+      # before it ever reaches Conditions. (Not necessarily synchronous: a
+      # prior test in this shared-singleton suite may have last switched
+      # the cache to a different model, in which case this is itself a
+      # switch back to "wg" and needs its own background fetch to land.)
+      eventually(fn ->
+        body =
+          Jason.decode!(authed_get("/v1/conditions?lat=52.36&lon=5.04&model=bogus").resp_body)
+
+        body["requested_model"] == "wg" and body["forecast"]["model"] == "wg"
+      end)
+
+      body = Jason.decode!(authed_get("/v1/conditions?lat=52.36&lon=5.04&model=bogus").resp_body)
+      assert body["requested_model"] == "wg"
+      assert body["forecast"]["model"] == "wg"
     end
   end
 
