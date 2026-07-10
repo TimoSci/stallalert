@@ -146,6 +146,31 @@ defmodule Stallalert.RouterTest do
       assert body["requested_model"] == "wg"
       assert body["forecast"]["model"] == "wg"
     end
+
+    # Regression for the whole-branch review's Critical #1: a digit `model=`
+    # outside the ladder's supported domain (`{3, 52, 104, 117, 64}`) must be
+    # normalized to "wg" by the router -- same as any other unrecognized
+    # descriptor -- per the spec's "Unknown values -> treated as wg" and so
+    # this out-of-domain id can never reach `Conditions`/the adapter, no
+    # matter what BlendConfig's constituent snapshot advertises.
+    test "an out-of-domain numeric model param (not in the ladder's whitelist) defaults to wg" do
+      for model <- ["45", "999"] do
+        eventually(fn ->
+          body =
+            Jason.decode!(
+              authed_get("/v1/conditions?lat=52.36&lon=5.04&model=#{model}").resp_body
+            )
+
+          body["requested_model"] == "wg" and body["forecast"]["model"] == "wg"
+        end)
+
+        body =
+          Jason.decode!(authed_get("/v1/conditions?lat=52.36&lon=5.04&model=#{model}").resp_body)
+
+        assert body["requested_model"] == "wg"
+        assert body["forecast"]["model"] == "wg"
+      end
+    end
   end
 
   defp authed_get(path) do

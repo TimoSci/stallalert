@@ -53,14 +53,21 @@ defmodule Stallalert.Router do
   # `Stallalert.Conditions` is the one that maps a model descriptor string
   # to the adapter's actual `:wg | integer` arg; the router's job is just
   # to pass through a recognizable descriptor (or default/normalize to
-  # "wg" for anything else -- missing, empty, or non-numeric non-"wg").
+  # "wg" for anything else -- missing, empty, non-numeric non-"wg", OR a
+  # digit string outside the ladder's supported domain). Only ids the
+  # `HTTPAdapter` degradation ladder actually knows how to serve are
+  # allowed through; any other numeric id (e.g. "45", "999") is normalized
+  # to "wg" here, same as a garbage string -- per spec, "Unknown values ->
+  # treated as wg".
+  @supported_models ~w(3 52 104 117 64)
+
   defp parse_model(nil), do: "wg"
   defp parse_model(""), do: "wg"
   defp parse_model("wg"), do: "wg"
 
   defp parse_model(value) do
     case Integer.parse(value) do
-      {_, ""} -> value
+      {_, ""} when value in @supported_models -> value
       _ -> "wg"
     end
   end

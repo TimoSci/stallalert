@@ -164,10 +164,13 @@ defmodule Stallalert.Windguru.HTTPAdapter do
 
   @doc """
   Models servable for `lat`/`lon`: the synthetic `"wg"` blend followed by
-  whichever WG-blend constituents (per `BlendConfig.weights/0`) aren't
-  currently marked unavailable (outside-grid) for this location's 0.1°
-  cell. Names come from `@model_names`; an unmapped constituent id falls
-  back to `"Model <id>"`.
+  whichever WG-blend constituents (per `BlendConfig.weights/0`) both have a
+  known `@model_names` entry and aren't currently marked unavailable
+  (outside-grid) for this location's 0.1° cell. Constituents with no
+  `@model_names` entry are dropped entirely rather than exposed as a raw
+  "Model <id>" row -- the id-list is Windguru's editorial blend snapshot,
+  not curated for end-user display, and the picker must only ever offer ids
+  the ladder is prepared to serve.
   """
   @impl true
   def available_models(lat, lon) do
@@ -176,6 +179,7 @@ defmodule Stallalert.Windguru.HTTPAdapter do
 
     models =
       constituents
+      |> Enum.filter(&Map.has_key?(@model_names, &1))
       |> Enum.reject(&unavailable?(cell, &1))
       |> Enum.map(fn id -> %{id: Integer.to_string(id), name: model_name(id)} end)
 
@@ -234,7 +238,7 @@ defmodule Stallalert.Windguru.HTTPAdapter do
     end
   end
 
-  defp forecast_ladder(lat, lon, model, spacing_state) when model in [3, 104, 117, 64] do
+  defp forecast_ladder(lat, lon, model, spacing_state) when is_integer(model) do
     fetch_cached(lat, lon, model, spacing_state)
   end
 
@@ -477,7 +481,10 @@ defmodule Stallalert.Windguru.HTTPAdapter do
   defp cell(lat, lon), do: {round1(lat), round1(lon)}
   defp round1(x), do: Float.round(x * 1.0, 1)
 
-  defp model_name(id), do: Map.get(@model_names, id, "Model #{id}")
+  # Only ever called after `Enum.filter(&Map.has_key?(@model_names, &1))`
+  # above, so every id reaching here is a known key -- no "Model <id>"
+  # fallback needed (or wanted: an unmapped id is filtered out, not shown).
+  defp model_name(id), do: Map.fetch!(@model_names, id)
 
   defp fetch_station_list do
     # Check-then-put race accepted: this is single-node with a 6h TTL, so the

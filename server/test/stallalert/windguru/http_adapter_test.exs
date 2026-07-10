@@ -660,6 +660,26 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
       refute_received {:hit, _}
     end
 
+    # Regression for the whole-branch review's Critical #1: BlendConfig's
+    # shipped snapshot lists constituents (e.g. 45, 107, 21, 43, 59) outside
+    # the ladder's old `model in [3, 104, 117, 64]` guard, which the watch
+    # picker can surface via `available_models/2` and a user can select --
+    # `forecast_ladder/4` must accept ANY integer model id, not just the
+    # five named ones, or the async forecast task crash-loops forever for
+    # that (position, model) pair.
+    test "forecast(lat, lon, 45) -- an id outside the ladder's named clauses -- still fetches (no FunctionClauseError)" do
+      test_pid = self()
+
+      stub_by_id_model(fn conn, id_model ->
+        send(test_pid, {:hit, id_model})
+        Req.Test.json(conn, @forecast_custom)
+      end)
+
+      assert {:ok, %{model: "GFS 13 km"}} = HTTPAdapter.forecast(39.92, 3.09, 45)
+      assert_received {:hit, "45"}
+      refute_received {:hit, _}
+    end
+
     test "clear_availability_cache/0 resets a marked-unavailable cell so it is re-requested" do
       stub_by_id_model(fn conn, _id_model ->
         Plug.Conn.send_resp(conn, 404, @outside_grid_body)
@@ -703,9 +723,27 @@ defmodule Stallalert.Windguru.HTTPAdapterTest do
       assert models == [
                %{id: "wg", name: "WG blend"},
                %{id: "3", name: "GFS 13 km"},
-               %{id: "104", name: "ICON-2I 2.2 km"},
-               %{id: "999", name: "Model 999"}
+               %{id: "104", name: "ICON-2I 2.2 km"}
              ]
+    end
+
+    # Regression for Critical #1: BlendConfig's real snapshot includes
+    # constituents with no `@model_names` entry (e.g. 45). Those must never
+    # surface as selectable "Model <id>" picker rows -- filtering them out
+    # here is the second half of the defense (the first is the ladder no
+    # longer crashing on them at all).
+    test "excludes constituents with no @model_names entry entirely (no 'Model <id>' fallback rows)" do
+      seed_constituents([3, 45, 104])
+
+      assert {:ok, models} = HTTPAdapter.available_models(39.92, 3.09)
+
+      assert models == [
+               %{id: "wg", name: "WG blend"},
+               %{id: "3", name: "GFS 13 km"},
+               %{id: "104", name: "ICON-2I 2.2 km"}
+             ]
+
+      refute Enum.any?(models, &(&1.id == "45"))
     end
   end
 
