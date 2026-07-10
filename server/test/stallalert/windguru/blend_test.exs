@@ -90,6 +90,27 @@ defmodule Stallalert.Windguru.BlendTest do
       # it returns ~90.5, a true RED -- see task-3-blend-report.md).
       assert_direction_close(0.5, h1.dir_deg)
     end
+
+    test "antipodal per-model directions at exact midpoint pick the before-step" do
+      # Model A: constant 90 deg hourly, so it doesn't perturb direction from B's contribution
+      hourly_a = for h <- 0..2, do: step(DateTime.add(@now, h * 3600), 1, 1, 90)
+
+      # Model B: two steps at 0h (0 deg) and +2h (180 deg, antipodal)
+      # Grid +1h falls exactly at fraction 0.5 between them
+      steps_b = [step(@now, 1, 1, 0), step(DateTime.add(@now, 2 * 3600), 1, 1, 180)]
+
+      a = forecast("A", @now, hourly_a)
+      b = forecast("B", @now, steps_b)
+
+      assert {:ok, blended} = Blend.blend([{1, a}, {2, b}], %{1 => 1.0, 2 => 1.0}, @now)
+      [_h0, h1 | _] = blended.hours
+
+      # B's per-model interpolation at +1h with antipodal 0/180 at exactly 0.5
+      # should fall back to before-step (0 deg), NOT after-step (180 deg).
+      # Equal-weight blend of A's 90 deg and B's (correctly) 0 deg should give 45.0.
+      # If the bug returns 180 deg, blend of 90 and 180 gives 135.0.
+      assert_direction_close(45.0, h1.dir_deg)
+    end
   end
 
   describe "within-horizon only: short model stops contributing" do

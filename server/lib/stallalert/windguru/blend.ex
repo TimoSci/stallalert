@@ -34,9 +34,8 @@ defmodule Stallalert.Windguru.Blend do
   degrees and normalized to `[0, 360)`. If the lerped vector's magnitude is
   negligible (`< 1.0e-9` -- the bracketing steps are opposite directions
   and the fraction lands at the midpoint, 0.5), there is no meaningful
-  in-between direction; the fallback is the nearer bracketing step (`frac
-  < 0.5` -> before-step, otherwise after-step; exactly `0.5` deterministically
-  picks the before-step).
+  in-between direction; the fallback is the nearer bracketing step: `fraction
+  <= 0.5` picks before-step, else after-step.
 
   A model only contributes to a grid step `t` when `t` falls within its
   own published horizon (its first step `<= t <=` its last step) --
@@ -231,7 +230,7 @@ defmodule Stallalert.Windguru.Blend do
       # Opposite directions at the midpoint (frac 0.5): no meaningful lerped
       # direction. Fall back to the nearer bracketing step; exactly 0.5 is
       # deterministic (before-step wins).
-      if fraction < 0.5, do: before_deg, else: after_deg
+      if fraction <= 0.5, do: before_deg, else: after_deg
     else
       degrees = :math.atan2(sin, cos) * @rad_to_deg
       if degrees < 0, do: degrees + 360, else: degrees
