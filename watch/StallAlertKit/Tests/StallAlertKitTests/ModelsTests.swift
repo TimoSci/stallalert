@@ -81,4 +81,32 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(c.station?.reading?.directionHistory?[1].dirDeg, 178.0)
         XCTAssertEqual(c.station?.reading?.directionHistory?[1].time, Date(timeIntervalSince1970: 1783331700))
     }
+
+    func testExistingFixtureHasNoModelFields() throws {
+        let url = Bundle.module.url(forResource: "Fixtures/conditions", withExtension: "json")!
+        let data = try Data(contentsOf: url)
+        let c = try Conditions.decoder().decode(Conditions.self, from: data)
+        XCTAssertNil(c.requestedModel)
+        XCTAssertNil(c.availableModels)
+    }
+
+    func testDecodesRequestedModelAndAvailableModels() throws {
+        let json = """
+        {"generated_at":"2026-07-06T10:00:00Z","stale":false,
+         "forecast":{"model":"gfs-micro","init_time":"2026-07-06T06:00:00Z","hours":[]},
+         "station":{"id":42,"name":"Main","distance_km":0.5,"reading":null},
+         "requested_model":"wg",
+         "available_models":[
+           {"id":"wg","name":"WG blend"},
+           {"id":"gfs","name":"GFS"}
+         ]}
+        """.data(using: .utf8)!
+        let c = try Conditions.decoder().decode(Conditions.self, from: json)
+        XCTAssertEqual(c.requestedModel, "wg")
+        XCTAssertEqual(c.availableModels?.count, 2)
+        XCTAssertEqual(c.availableModels?[0].id, "wg")
+        XCTAssertEqual(c.availableModels?[0].name, "WG blend")
+        XCTAssertEqual(c.availableModels?[1].id, "gfs")
+        XCTAssertEqual(c.availableModels?[1].name, "GFS")
+    }
 }

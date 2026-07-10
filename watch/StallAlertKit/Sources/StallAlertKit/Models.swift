@@ -1,5 +1,14 @@
 import Foundation
 
+public struct AvailableModel: Codable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+    public init(id: String, name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
 public struct NearbyStation: Codable, Equatable, Sendable {
     public let id: Int
     public let name: String
@@ -80,12 +89,16 @@ public struct Conditions: Codable, Equatable, Sendable {
     public let forecast: Forecast
     public let station: Station?
     public let nearbyStations: [NearbyStation]?
-    public init(generatedAt: Date, stale: Bool, forecast: Forecast, station: Station?, nearbyStations: [NearbyStation]? = nil) {
+    public let requestedModel: String?
+    public let availableModels: [AvailableModel]?
+    public init(generatedAt: Date, stale: Bool, forecast: Forecast, station: Station?, nearbyStations: [NearbyStation]? = nil, requestedModel: String? = nil, availableModels: [AvailableModel]? = nil) {
         self.generatedAt = generatedAt
         self.stale = stale
         self.forecast = forecast
         self.station = station
         self.nearbyStations = nearbyStations
+        self.requestedModel = requestedModel
+        self.availableModels = availableModels
     }
 
     public static func decoder() -> JSONDecoder {
