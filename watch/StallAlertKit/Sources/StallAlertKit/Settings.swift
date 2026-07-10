@@ -49,6 +49,9 @@ public final class KeychainStore: SecretStore {
 public struct Settings {
     public var thresholdKn: Double
     public var serviceURL: URL?
+    /// "wg" (default) requests the server's WG blend; any other value is a
+    /// specific forecast model id, sent as-is in the `model:` request param.
+    public var forecastModel: String
 
     public static let serviceTokenKey = "service_token"
     public static let wgUsernameKey = "wg_username"
@@ -57,13 +60,15 @@ public struct Settings {
     public static func load(defaults: UserDefaults, secrets: SecretStore) -> Settings {
         let threshold = defaults.object(forKey: "threshold_kn") as? Double ?? 12
         let url = defaults.string(forKey: "service_url").flatMap(URL.init(string:))
+        let forecastModel = defaults.string(forKey: "forecast_model") ?? "wg"
         _ = secrets // secrets are read directly by callers via keys
-        return Settings(thresholdKn: threshold, serviceURL: url)
+        return Settings(thresholdKn: threshold, serviceURL: url, forecastModel: forecastModel)
     }
 
     public func save(defaults: UserDefaults, secrets: SecretStore) {
         defaults.set(thresholdKn, forKey: "threshold_kn")
         defaults.set(serviceURL?.absoluteString, forKey: "service_url")
+        defaults.set(forecastModel, forKey: "forecast_model")
         _ = secrets
     }
 }
