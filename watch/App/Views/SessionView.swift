@@ -1,9 +1,11 @@
 import SwiftUI
+import WatchKit
 import StallAlertKit
 
 struct SessionView: View {
     @Environment(SessionController.self) private var session
     @State private var showStationPicker = false
+    @State private var isRefreshing = false
 
     var body: some View {
         ScrollView {
@@ -25,10 +27,11 @@ struct SessionView: View {
                 }
 
                 if let st = session.conditions?.station, let r = st.reading {
-                    Button {
-                        showStationPicker = true
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        // Row 1: station identity — still the picker entry point.
+                        Button {
+                            showStationPicker = true
+                        } label: {
                             HStack(spacing: 3) {
                                 Text("NOW · \(st.name) \(st.distanceKm, specifier: "%.1f") km")
                                     .font(.caption2).foregroundStyle(.secondary)
@@ -36,16 +39,32 @@ struct SessionView: View {
                                     Image(systemName: "pin.fill").font(.caption2)
                                 }
                             }
-                            HStack(spacing: 8) {
-                                Text("\(Int(r.windKn.rounded())) kn  gust \(Int(r.gustKn.rounded()))")
-                                    .font(.title3).bold()
-                                    .foregroundStyle(ageSeconds(r) > 20 * 60 ? .secondary : color(for: r.windKn))
-                                CompassView(reading: r, stale: ageSeconds(r) > 20 * 60)
-                            }
-                            Text(ageLabel(r)).font(.footnote).foregroundStyle(.secondary)
                         }
+                        .buttonStyle(.plain)
+
+                        // Rows 2–3: live numbers + freshness — tap to force a refresh.
+                        Button {
+                            guard !isRefreshing else { return }
+                            WKInterfaceDevice.current().play(.click)
+                            isRefreshing = true
+                            Task {
+                                await session.refreshTick()
+                                isRefreshing = false
+                            }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 8) {
+                                    Text("\(Int(r.windKn.rounded())) kn  gust \(Int(r.gustKn.rounded()))")
+                                        .font(.title3).bold()
+                                        .foregroundStyle(ageSeconds(r) > 20 * 60 ? .secondary : color(for: r.windKn))
+                                    CompassView(reading: r, stale: ageSeconds(r) > 20 * 60)
+                                }
+                                FreshnessLineView(readingTime: r.time)
+                                    .opacity(isRefreshing ? 0.4 : 1)
+                            }
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 } else {
                     // Still a picker entry point: the served station can be nil
                     // (reading failed / none in range) while candidates exist —
@@ -84,7 +103,66 @@ struct SessionView: View {
         return .green
     }
     private func ageSeconds(_ r: StationReading) -> TimeInterval { Date().timeIntervalSince(r.time) }
-    private func ageLabel(_ r: StationReading) -> String {
-        "updated \(Int(ageSeconds(r) / 60)) min ago"
+}
+
+/// "updated n min ago" plus a thin dotted age track: a `<` marker travels
+/// from the `|` origin to the right edge over 15 min, then becomes a clock
+/// symbol. Text fades greyish-green -> gray over the first 5 min.
+/// Lives inside SessionView.swift deliberately: adding an app-target file
+/// would force an xcodegen regeneration (scheme-wipe ritual).
+private struct FreshnessLineView: View {
+    let readingTime: Date
+
+    var body: some View {
+        // 15 s cadence keeps fade/marker/minutes moving between fetches.
+        TimelineView(.periodic(from: .now, by: 15)) { context in
+            let f = FreshnessModel.render(readingTime: readingTime, now: context.date)
+            let minutes = Int(max(0, context.date.timeIntervalSince(readingTime)) / 60)
+            HStack(spacing: 6) {
+                Text("updated \(minutes) min ago")
+                    .font(.footnote)
+                    .foregroundStyle(textColor(greenness: f.greenness))
+                    .fixedSize()
+                track(f)
+            }
+        }
+    }
+
+    // Endpoints per spec: clearly green-tinted at 1, ~.secondary gray at 0.
+    private func textColor(greenness: Double) -> Color {
+        Color(hue: 0.36, saturation: 0.35 * greenness, brightness: 0.75)
+    }
+
+    private func track(_ f: FreshnessRender) -> some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            ZStack(alignment: .leading) {
+                Rectangle()
+                    .fill(.secondary.opacity(0.6))
+                    .frame(width: 1.5, height: 10)
+                HStack(spacing: 0) {
+                    ForEach(0..<12, id: \.self) { _ in
+                        Circle()
+                            .fill(.secondary.opacity(0.35))
+                            .frame(width: 1.5, height: 1.5)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(.leading, 3)
+                .frame(height: 10)
+                if f.showClock {
+                    Image(systemName: "clock")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .position(x: w - 5, y: geo.size.height / 2)
+                } else {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .position(x: 4 + (w - 8) * f.markerFraction, y: geo.size.height / 2)
+                }
+            }
+        }
+        .frame(height: 12)
     }
 }
