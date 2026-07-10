@@ -77,7 +77,13 @@ public final class DirectWindguruClient: WindDataProvider, @unchecked Sendable {
         self.session = session
     }
 
-    public func fetch(lat: Double, lon: Double, stationID: Int?) async throws -> Conditions {
+    /// `model` is accepted (to satisfy `WindDataProvider`) but deliberately
+    /// ignored: this on-water fallback always fetches the PRO micro API's
+    /// single GFS run (`m=gfs` below). Per the WG-blend spec's no-on-watch-blending
+    /// decision, model selection/blending is server-side only — the direct
+    /// client has no server to defer to, so it stays on plain micro-GFS
+    /// regardless of what the caller requests.
+    public func fetch(lat: Double, lon: Double, stationID: Int?, model: String?) async throws -> Conditions {
         guard !username.isEmpty, !microPassword.isEmpty else {
             throw ProviderError.notConfigured
         }
