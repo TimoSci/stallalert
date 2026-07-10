@@ -102,6 +102,34 @@ defmodule Stallalert.ConditionsTest do
     assert {:error, :no_data} = Conditions.get(pid, 52.36, 5.04)
   end
 
+  @tag :capture_log
+  test "a crashed forecast task clears the in-flight gate and the next request retries", %{
+    pid: pid
+  } do
+    FakeAdapter.set(:forecast, :raise)
+
+    # First get triggers async task that will crash
+    assert {:error, :no_data} = Conditions.get(pid, 52.36, 5.04)
+
+    # Restore healthy forecast response; the crash will clear the in-flight
+    # gate, allowing the next get to start a fresh fetch. Without the fix,
+    # the gate remains set to the dead task's ref, and retries are stuck.
+    FakeAdapter.set(
+      :forecast,
+      {:ok,
+       %{
+         model: "wg",
+         init_time: ~U[2026-07-06 06:00:00Z],
+         hours: [%{time: ~U[2026-07-06 10:00:00Z], wind_kn: 14.0, gust_kn: 21.0, dir_deg: 225.0}]
+       }}
+    )
+
+    # Eventually the new fetch completes (if gate was properly cleared)
+    # by the :DOWN handler.
+    assert {:ok, c} = eventually_ok(fn -> Conditions.get(pid, 52.36, 5.04) end)
+    assert c.forecast.model == "wg"
+  end
+
   test "no station within range yields station: nil", %{pid: pid} do
     FakeAdapter.set(:nearest_station, {:ok, nil})
     assert {:ok, c} = eventually_ok(fn -> Conditions.get(pid, 52.36, 5.04) end)

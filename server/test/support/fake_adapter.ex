@@ -46,6 +46,9 @@ defmodule Stallalert.FakeAdapter do
     bump(:forecast_calls)
 
     case get_resp(:forecast, {:ok, default_forecast(model)}) do
+      :raise ->
+        raise "boom"
+
       {:block, test_pid} ->
         ref = make_ref()
         send(test_pid, {:fake_adapter_forecast_started, self(), ref, model})
