@@ -16,6 +16,9 @@ final class ForecastEngineTests: XCTestCase {
         XCTAssertEqual(v.maxKn, 21, accuracy: 0.01)   // gust at now
         XCTAssertEqual(v.trend, .dropping)
         XCTAssertEqual(v.projectedBaseKn, 11, accuracy: 0.01)
+        XCTAssertEqual(v.samplesKn.count, 7)
+        XCTAssertEqual(v.samplesKn.last!, v.projectedBaseKn, accuracy: 0.0001)
+        XCTAssertEqual(v.samplesKn.min()!, v.minKn, accuracy: 0.0001)
     }
 
     func testSteadyWindWithinOneKnot() {

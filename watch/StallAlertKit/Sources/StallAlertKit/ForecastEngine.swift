@@ -7,8 +7,11 @@ public struct NextHourView: Equatable, Sendable {
     public let maxKn: Double
     public let trend: Trend
     public let projectedBaseKn: Double
-    public init(minKn: Double, maxKn: Double, trend: Trend, projectedBaseKn: Double) {
-        self.minKn = minKn; self.maxKn = maxKn; self.trend = trend; self.projectedBaseKn = projectedBaseKn
+    public let samplesKn: [Double]
+    public init(minKn: Double, maxKn: Double, trend: Trend, projectedBaseKn: Double,
+                samplesKn: [Double] = []) {
+        self.minKn = minKn; self.maxKn = maxKn; self.trend = trend
+        self.projectedBaseKn = projectedBaseKn; self.samplesKn = samplesKn
     }
 }
 
@@ -26,7 +29,8 @@ public enum ForecastEngine {
         let baseNow = bases.first!, baseNext = bases.last!
         let delta = baseNext - baseNow
         let trend: Trend = delta > 1 ? .rising : (delta < -1 ? .dropping : .steady)
-        return NextHourView(minKn: bases.min()!, maxKn: gusts.max()!, trend: trend, projectedBaseKn: baseNext)
+        return NextHourView(minKn: bases.min()!, maxKn: gusts.max()!, trend: trend,
+                            projectedBaseKn: baseNext, samplesKn: bases)
     }
 
     private static func interpolate(_ steps: [WindStep], at t: Date, value: (WindStep) -> Double) -> Double? {

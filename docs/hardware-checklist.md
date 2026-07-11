@@ -130,3 +130,12 @@ review and verify specific decisions.
       symbol.
 - [ ] With the auto-refresh healthy (5-min cadence) the marker never gets
       far past ~1/3 of the track.
+
+## Next-hour trendline (added 2026-07-11)
+- [ ] The trend arrow is gone on BOTH the start screen and the session
+      screen; a small line graph sits right of the kn range instead.
+- [ ] When the forecast is dropping, the line slopes down toward the
+      faint red dashed threshold line.
+- [ ] Flat forecast draws a near-flat line (no exaggerated wiggle).
+- [ ] The graph's color matches the numbers next to it (tinted on the
+      session screen, plain on the start screen).
