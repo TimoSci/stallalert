@@ -13,9 +13,14 @@ struct SessionView: View {
                 if let nh = session.nextHour {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("NEXT HOUR").font(.caption2).foregroundStyle(.secondary)
-                        Text("\(Int(nh.minKn.rounded()))–\(Int(nh.maxKn.rounded())) kn \(trendSymbol(nh.trend))")
-                            .font(.title2).bold()
-                            .foregroundStyle(color(for: nh.minKn))
+                        HStack(spacing: 6) {
+                            Text("\(Int(nh.minKn.rounded()))–\(Int(nh.maxKn.rounded())) kn")
+                                .font(.title2).bold()
+                                .foregroundStyle(color(for: nh.minKn))
+                            TrendlineView(samplesKn: nh.samplesKn,
+                                          thresholdKn: session.settings.thresholdKn,
+                                          tint: color(for: nh.minKn))
+                        }
                         if nh.trend == .dropping {
                             Text("dropping to ~\(Int(nh.projectedBaseKn.rounded()))")
                                 .font(.footnote).foregroundStyle(.secondary)
