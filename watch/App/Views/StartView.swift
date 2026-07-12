@@ -11,9 +11,13 @@ struct StartView: View {
                 HStack(spacing: 6) {
                     Text("\(Int(nh.minKn.rounded()))–\(Int(nh.maxKn.rounded())) kn")
                         .font(.title3)
+                        .lineLimit(1).minimumScaleFactor(0.8)
                     TrendlineView(samplesKn: nh.samplesKn,
                                   thresholdKn: session.settings.thresholdKn,
                                   tint: .primary)
+                    if let d = nh.dirDeg {
+                        ForecastArrowView(dirDeg: d, tint: .primary)
+                    }
                 }
             } else {
                 Text("StallAlert").font(.title3)
@@ -65,5 +69,27 @@ struct TrendlineView: View {
             }
             .frame(width: size.width, height: size.height)
         }
+    }
+}
+
+/// Forecast wind-direction dial: the station compass's rim and downwind
+/// arrow (via the shared CompassModel.downwindAngle), without history
+/// ticks. The arrow — not the rim — takes the NEXT HOUR tint so it reads
+/// as part of the forecast row. Lives here beside TrendlineView so no new
+/// app-target file forces an xcodegen run.
+struct ForecastArrowView: View {
+    let dirDeg: Double
+    let tint: Color
+    var size: CGFloat = 22
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(.secondary.opacity(0.3), lineWidth: 1)
+            Image(systemName: "location.north.fill")
+                .font(.system(size: size * 0.45))
+                .rotationEffect(.degrees(CompassModel.downwindAngle(fromDeg: dirDeg)))
+                .foregroundStyle(tint)
+        }
+        .frame(width: size, height: size)
     }
 }

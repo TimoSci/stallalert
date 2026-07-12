@@ -17,9 +17,13 @@ struct SessionView: View {
                             Text("\(Int(nh.minKn.rounded()))–\(Int(nh.maxKn.rounded())) kn")
                                 .font(.title2).bold()
                                 .foregroundStyle(color(for: nh.minKn))
+                                .lineLimit(1).minimumScaleFactor(0.8)
                             TrendlineView(samplesKn: nh.samplesKn,
                                           thresholdKn: session.settings.thresholdKn,
                                           tint: color(for: nh.minKn))
+                            if let d = nh.dirDeg {
+                                ForecastArrowView(dirDeg: d, tint: color(for: nh.minKn))
+                            }
                         }
                         if nh.trend == .dropping {
                             Text("dropping to ~\(Int(nh.projectedBaseKn.rounded()))")

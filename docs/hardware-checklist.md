@@ -151,3 +151,12 @@ review and verify specific decisions.
       green keeps resetting (healthy connection, stale station).
 - [ ] With the server unreachable (offline pill showing), BOTH chevrons
       drift right together.
+
+## Forecast direction arrow (added 2026-07-13)
+- [ ] A small dial with an arrow sits right of the NEXT HOUR mini-graph on
+      BOTH screens; the arrow matches windguru.cz's forecast direction for
+      the spot (downwind convention, same as the station arrow below).
+- [ ] The arrow is tinted like the NEXT HOUR numbers (colored on the
+      session screen, plain on the start screen); the rim stays faint gray.
+- [ ] The NEXT HOUR numbers never wrap to two lines (they shrink slightly
+      instead if space is tight).
