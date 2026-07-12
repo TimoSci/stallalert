@@ -139,3 +139,15 @@ review and verify specific decisions.
 - [ ] Flat forecast draws a near-flat line (no exaggerated wiggle).
 - [ ] The graph's color matches the numbers next to it (tinted on the
       session screen, plain on the start screen).
+
+## Dual-chevron freshness line (added 2026-07-12)
+- [ ] The line under the live wind reads "measured x min ago".
+- [ ] Right after a fetch delivers a new sample the text is noticeably
+      greener than the old tint, still muted; gray again by ~5 min.
+- [ ] Two chevrons on the track: green resets toward the origin on every
+      successful fetch (every ~5 min), blue keeps aging with the sample —
+      on a slow station they visibly separate.
+- [ ] Blue chevron becomes the clock symbol at ~15 min sample age while
+      green keeps resetting (healthy connection, stale station).
+- [ ] With the server unreachable (offline pill showing), BOTH chevrons
+      drift right together.
