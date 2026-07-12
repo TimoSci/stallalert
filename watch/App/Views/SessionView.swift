@@ -64,7 +64,8 @@ struct SessionView: View {
                                         .foregroundStyle(ageSeconds(r) > 20 * 60 ? .secondary : color(for: r.windKn))
                                     CompassView(reading: r, stale: ageSeconds(r) > 20 * 60)
                                 }
-                                FreshnessLineView(readingTime: r.time)
+                                FreshnessLineView(readingTime: r.time,
+                                                  lastFetchTime: session.lastSuccessfulFetch)
                                     .opacity(isRefreshing ? 0.4 : 1)
                             }
                         }
@@ -110,35 +111,42 @@ struct SessionView: View {
     private func ageSeconds(_ r: StationReading) -> TimeInterval { Date().timeIntervalSince(r.time) }
 }
 
-/// "updated n min ago" plus a thin dotted age track: a `<` marker travels
-/// from the `|` origin to the right edge over 15 min, then becomes a clock
-/// symbol. Text fades greyish-green -> gray over the first 5 min.
+/// "measured n min ago" plus a thin dotted age track with two markers:
+/// a green chevron for time since the last SUCCESSFUL fetch (the app's
+/// connection health) and a blue chevron for the station sample's age
+/// (what the number on screen actually is). A reading is measured before
+/// the fetch that delivered it, so blue sits at or right of green except
+/// under station clock skew (both clamp identically in the model). The
+/// blue marker becomes a clock symbol at 15 min, exactly as before.
+/// Text fades greyish-green -> gray over the first 5 min (measured clock).
 /// Lives inside SessionView.swift deliberately: adding an app-target file
 /// would force an xcodegen regeneration (scheme-wipe ritual).
 private struct FreshnessLineView: View {
     let readingTime: Date
+    let lastFetchTime: Date?
 
     var body: some View {
-        // 15 s cadence keeps fade/marker/minutes moving between fetches.
+        // 15 s cadence keeps fade/markers/minutes moving between fetches.
         TimelineView(.periodic(from: .now, by: 15)) { context in
-            let f = FreshnessModel.render(readingTime: readingTime, now: context.date)
+            let measured = FreshnessModel.render(readingTime: readingTime, now: context.date)
+            let update = lastFetchTime.map { FreshnessModel.render(readingTime: $0, now: context.date) }
             let minutes = Int(max(0, context.date.timeIntervalSince(readingTime)) / 60)
             HStack(spacing: 6) {
-                Text("updated \(minutes) min ago")
+                Text("measured \(minutes) min ago")
                     .font(.footnote)
-                    .foregroundStyle(textColor(greenness: f.greenness))
+                    .foregroundStyle(textColor(greenness: measured.greenness))
                     .fixedSize()
-                track(f)
+                track(measured: measured, update: update)
             }
         }
     }
 
     // Endpoints per spec: clearly green-tinted at 1, ~.secondary gray at 0.
     private func textColor(greenness: Double) -> Color {
-        Color(hue: 0.36, saturation: 0.35 * greenness, brightness: 0.75)
+        Color(hue: 0.36, saturation: 0.5 * greenness, brightness: 0.75)
     }
 
-    private func track(_ f: FreshnessRender) -> some View {
+    private func track(measured: FreshnessRender, update: FreshnessRender?) -> some View {
         GeometryReader { geo in
             let w = geo.size.width
             ZStack(alignment: .leading) {
@@ -155,7 +163,13 @@ private struct FreshnessLineView: View {
                 }
                 .padding(.leading, 3)
                 .frame(height: 10)
-                if f.showClock {
+                if let update {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.green)
+                        .position(x: 4 + (w - 8) * update.markerFraction, y: geo.size.height / 2)
+                }
+                if measured.showClock {
                     Image(systemName: "clock")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
@@ -163,8 +177,8 @@ private struct FreshnessLineView: View {
                 } else {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .position(x: 4 + (w - 8) * f.markerFraction, y: geo.size.height / 2)
+                        .foregroundStyle(.blue)
+                        .position(x: 4 + (w - 8) * measured.markerFraction, y: geo.size.height / 2)
                 }
             }
         }

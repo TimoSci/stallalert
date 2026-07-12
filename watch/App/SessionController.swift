@@ -21,6 +21,11 @@ final class SessionController: NSObject {
     private(set) var manualStationActive = false
     private(set) var availableModels: [AvailableModel] = []
     private(set) var servedModelCaption: String?
+    /// Wall-clock time of the last SUCCESSFUL fetch (any data source), for the
+    /// freshness line's green "update" chevron. Distinct from the reading's own
+    /// timestamp: a fetch can succeed while the station still serves an old
+    /// sample — the gap between the two chevrons is exactly that difference.
+    var lastSuccessfulFetch: Date?
     var settings = Settings.load(defaults: .standard, secrets: KeychainStore())
 
     private let healthStore = HKHealthStore()
@@ -76,6 +81,7 @@ final class SessionController: NSObject {
         // alert from state left over by the ended session.
         provider = nil
         policy = nil
+        lastSuccessfulFetch = nil
     }
 
     func acknowledgeAlert() {
@@ -133,6 +139,7 @@ final class SessionController: NSObject {
         do {
             let c = try await provider.fetch(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude, stationID: override?.stationID, model: requestedModel)
             conditions = c
+            lastSuccessfulFetch = Date()
             activeSource = await provider.activeSource
             lastError = nil
             nearbyStations = c.nearbyStations ?? []
