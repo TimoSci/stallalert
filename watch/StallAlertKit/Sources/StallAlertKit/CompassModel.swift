@@ -31,7 +31,7 @@ public struct CompassRender: Equatable, Sendable {
 public enum CompassModel {
     public static func render(reading: StationReading, now: Date) -> CompassRender {
         // Calculate the downwind arrow direction
-        let arrowAngleDeg = normalizeDownwind(reading.dirDeg)
+        let arrowAngleDeg = downwindAngle(fromDeg: reading.dirDeg)
 
         // Process historical direction samples
         var ticks: [CompassRender.Tick] = []
@@ -65,7 +65,7 @@ public enum CompassModel {
                 let opacity = min(0.6, 0.6 * max(0, 1 - age / 3600))  // min guards clock-skew (future-dated samples)
 
                 // Calculate downwind direction for this sample
-                let tickAngleDeg = normalizeDownwind(sample.dirDeg)
+                let tickAngleDeg = downwindAngle(fromDeg: sample.dirDeg)
 
                 let tick = CompassRender.Tick(angleDeg: tickAngleDeg, opacity: opacity)
                 ticks.append(tick)
@@ -77,7 +77,8 @@ public enum CompassModel {
 
     /// Normalizes a meteorological FROM-direction to a downwind TO-direction.
     /// Formula: (fromDeg + 180) % 360, with special handling for negative remainders.
-    private static func normalizeDownwind(_ fromDeg: Double) -> Double {
+    /// Public so other downwind renderings (e.g. the forecast arrow) share one implementation.
+    public static func downwindAngle(fromDeg: Double) -> Double {
         let downwind = (fromDeg + 180).truncatingRemainder(dividingBy: 360)
         return downwind < 0 ? downwind + 360 : downwind
     }

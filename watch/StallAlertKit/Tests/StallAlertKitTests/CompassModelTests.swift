@@ -102,4 +102,11 @@ final class CompassModelTests: XCTestCase {
         let render = CompassModel.render(reading: reading, now: t0)
         XCTAssertEqual(render.arrowAngleDeg, 170, accuracy: 0.001)
     }
+
+    func testDownwindAngleWraparound() {
+        XCTAssertEqual(CompassModel.downwindAngle(fromDeg: 350), 170)
+        XCTAssertEqual(CompassModel.downwindAngle(fromDeg: 90), 270)
+        XCTAssertEqual(CompassModel.downwindAngle(fromDeg: 180), 0)
+        XCTAssertEqual(CompassModel.downwindAngle(fromDeg: 0), 180)
+    }
 }

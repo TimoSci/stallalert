@@ -52,4 +52,38 @@ final class ForecastEngineTests: XCTestCase {
         XCTAssertNil(ForecastEngine.nextHour(from: f, at: t0.addingTimeInterval(-3600)))
         XCTAssertNil(ForecastEngine.nextHour(from: Forecast(model: "wg", initTime: t0, hours: []), at: t0))
     }
+
+    func testDirDegConstantDirection() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let steps = [
+            WindStep(time: now, windKn: 10, gustKn: 12, dirDeg: 90),
+            WindStep(time: now.addingTimeInterval(3600), windKn: 10, gustKn: 12, dirDeg: 90),
+        ]
+        let nh = ForecastEngine.nextHour(from: Forecast(model: "t", initTime: now, hours: steps), at: now)!
+        XCTAssertEqual(nh.dirDeg!, 90, accuracy: 0.0001)
+    }
+
+    func testDirDegNorthSeamAveragesToZero() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let steps = [
+            WindStep(time: now, windKn: 10, gustKn: 12, dirDeg: 350),
+            WindStep(time: now.addingTimeInterval(3600), windKn: 10, gustKn: 12, dirDeg: 10),
+        ]
+        let nh = ForecastEngine.nextHour(from: Forecast(model: "t", initTime: now, hours: steps), at: now)!
+        let d = nh.dirDeg!
+        // mean must sit at the seam (0°/360°), never anywhere near 180
+        XCTAssertTrue(d < 0.1 || d > 359.9, "expected ~0, got \(d)")
+    }
+
+    func testDirDegOpposingDirectionsIsNil() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let steps = [
+            WindStep(time: now, windKn: 10, gustKn: 12, dirDeg: 0),
+            WindStep(time: now.addingTimeInterval(3600), windKn: 10, gustKn: 12, dirDeg: 180),
+        ]
+        let nh = ForecastEngine.nextHour(from: Forecast(model: "t", initTime: now, hours: steps), at: now)!
+        // 0° and 180° in equal measure cancel: 3 samples each side of the
+        // antipodal midpoint (which itself yields no vector) -> nil
+        XCTAssertNil(nh.dirDeg)
+    }
 }
