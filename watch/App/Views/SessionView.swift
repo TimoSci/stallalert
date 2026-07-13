@@ -18,11 +18,12 @@ struct SessionView: View {
                                 .font(.title2).bold()
                                 .foregroundStyle(color(for: nh.minKn))
                                 .lineLimit(1).minimumScaleFactor(0.8)
+                            Spacer(minLength: 0)
                             TrendlineView(samplesKn: nh.samplesKn,
                                           thresholdKn: session.settings.thresholdKn,
                                           tint: color(for: nh.minKn))
+                            Spacer(minLength: 0)
                             if let d = nh.dirDeg {
-                                Spacer(minLength: 0)
                                 ForecastArrowView(dirDeg: d, tint: color(for: nh.minKn))
                             }
                         }

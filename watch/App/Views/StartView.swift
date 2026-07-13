@@ -12,11 +12,12 @@ struct StartView: View {
                     Text("\(Int(nh.minKn.rounded()))–\(Int(nh.maxKn.rounded())) kn")
                         .font(.title3)
                         .lineLimit(1).minimumScaleFactor(0.8)
+                    Spacer(minLength: 0)
                     TrendlineView(samplesKn: nh.samplesKn,
                                   thresholdKn: session.settings.thresholdKn,
                                   tint: .primary)
+                    Spacer(minLength: 0)
                     if let d = nh.dirDeg {
-                        Spacer(minLength: 0)
                         ForecastArrowView(dirDeg: d, tint: .primary)
                     }
                 }
