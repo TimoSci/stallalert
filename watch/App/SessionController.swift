@@ -35,7 +35,10 @@ final class SessionController: NSObject {
     private var provider: FailoverProvider?
     private var refreshTask: Task<Void, Never>?
     private let presenter = AlertPresenter()
-    private var isStarting = false
+    // Observable so StartView can show a spinner during the HealthKit
+    // workout spin-up (several seconds on a cold launch), which otherwise
+    // gives no visual feedback at all between the tap and phase flipping.
+    private(set) var isStarting = false
     private let overrideStore = StationOverrideStore()
 
     func startSession() async {

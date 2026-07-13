@@ -26,10 +26,20 @@ struct StartView: View {
             }
             Text("Alert below \(Int(session.settings.thresholdKn)) kn")
                 .font(.footnote).foregroundStyle(.secondary)
-            Button("Start Session") {
+            Button {
                 Task { await session.startSession() }
+            } label: {
+                if session.isStarting {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                        Text("Starting…")
+                    }
+                } else {
+                    Text("Start Session")
+                }
             }
             .buttonStyle(.borderedProminent).tint(.green)
+            .disabled(session.isStarting)
             if let err = session.lastError {
                 Text(err).font(.footnote).foregroundStyle(.red)
             }
