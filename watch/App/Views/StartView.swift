@@ -16,6 +16,7 @@ struct StartView: View {
                                   thresholdKn: session.settings.thresholdKn,
                                   tint: .primary)
                     if let d = nh.dirDeg {
+                        Spacer(minLength: 0)
                         ForecastArrowView(dirDeg: d, tint: .primary)
                     }
                 }
@@ -80,7 +81,7 @@ struct TrendlineView: View {
 struct ForecastArrowView: View {
     let dirDeg: Double
     let tint: Color
-    var size: CGFloat = 22
+    var size: CGFloat = 26
 
     var body: some View {
         ZStack {

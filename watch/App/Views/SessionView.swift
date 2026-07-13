@@ -22,6 +22,7 @@ struct SessionView: View {
                                           thresholdKn: session.settings.thresholdKn,
                                           tint: color(for: nh.minKn))
                             if let d = nh.dirDeg {
+                                Spacer(minLength: 0)
                                 ForecastArrowView(dirDeg: d, tint: color(for: nh.minKn))
                             }
                         }
