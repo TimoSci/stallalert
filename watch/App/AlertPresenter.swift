@@ -13,7 +13,10 @@ final class AlertPresenter {
     // Haptics must fire even when the audio path fails — never let an audio
     // error break the alarm.
     func fire() {
-        stop()
+        // Cancel any running alarm WITHOUT deactivating the audio session:
+        // prepareAudio re-activates immediately, and a detached deactivation
+        // racing that activation could kill the new alarm's audio.
+        cancelPlayback()
         task = Task {
             await prepareAudio()
             for round in 0..<3 {
@@ -60,10 +63,20 @@ final class AlertPresenter {
     }
 
     func stop() {
+        cancelPlayback()
+        // Deactivation blocks the calling thread for seconds on watchOS —
+        // tapping OK on an alert froze the whole UI here (observed live,
+        // 2026-07-15). Fire-and-forget off the main actor; playback is
+        // already stopped, so WHEN the session winds down doesn't matter.
+        Task.detached(priority: .utility) {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
+    }
+
+    private func cancelPlayback() {
         task?.cancel()
         task = nil
         player?.stop()
         player = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }
