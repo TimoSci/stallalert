@@ -27,6 +27,7 @@ struct StartView: View {
             Text("Alert below \(Int(session.settings.thresholdKn)) kn")
                 .font(.footnote).foregroundStyle(.secondary)
             Button {
+                StartupTrace.mark("tap received")
                 Task { await session.startSession() }
             } label: {
                 if session.isStarting {

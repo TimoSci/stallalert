@@ -42,6 +42,7 @@ final class SessionController: NSObject {
     private let overrideStore = StationOverrideStore()
 
     func startSession() async {
+        StartupTrace.mark("startSession entry")
         guard phase == .idle, !isStarting else { return }
         isStarting = true
         defer { isStarting = false }
@@ -51,15 +52,19 @@ final class SessionController: NSObject {
             lastError = "Configure service URL and token in Settings"
             return
         }
+        StartupTrace.mark("token keychain read done")
         let service = ServiceClient(baseURL: url, token: token)
         let direct = DirectWindguruClient(username: secrets.get(Settings.wgUsernameKey) ?? "",
                                           microPassword: secrets.get(Settings.wgMicroPasswordKey) ?? "")
         provider = FailoverProvider(service: service, direct: direct)
         policy = AlertPolicy(thresholdKn: settings.thresholdKn)
+        StartupTrace.mark("providers built (2 more keychain reads)")
 
         locationManager.requestWhenInUseAuthorization()
+        StartupTrace.mark("CL requestWhenInUseAuthorization returned")
         locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
         locationManager.startUpdatingLocation()
+        StartupTrace.mark("CL startUpdatingLocation returned")
 
         // Workout session failure aborts the session because it's what guarantees background runtime for alerts;
         // the error stays visible on the start screen (the refresh loop, which clears lastError, never starts).
@@ -69,8 +74,10 @@ final class SessionController: NSObject {
             policy = nil
             return
         }
+        StartupTrace.mark("startWorkout returned")
         WKInterfaceDevice.current().enableWaterLock()
         phase = .running
+        StartupTrace.mark("phase = .running")
         startRefreshLoop()
     }
 
@@ -93,13 +100,16 @@ final class SessionController: NSObject {
     }
 
     private func startWorkout() async -> Bool {
+        StartupTrace.mark("startWorkout entry")
         guard HKHealthStore.isHealthDataAvailable() else {
             lastError = "Health data unavailable"
             return false
         }
+        StartupTrace.mark("isHealthDataAvailable done")
         do {
             try await healthStore.requestAuthorization(
                 toShare: [HKObjectType.workoutType()], read: [])
+            StartupTrace.mark("HK requestAuthorization done")
         } catch {
             lastError = "Health authorization failed: \(error.localizedDescription)"
             return false
