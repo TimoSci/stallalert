@@ -84,7 +84,9 @@ final class SessionController: NSObject {
             return
         }
         StartupTrace.mark("startWorkout returned")
-        WKInterfaceDevice.current().enableWaterLock()
+        // Water lock is enabled from the workout-session delegate once the
+        // session reports .running — calling it here raced the async
+        // activation and always failed (Carousel error 5, observed live).
         phase = .running
         StartupTrace.mark("phase = .running")
         startRefreshLoop()
@@ -129,6 +131,7 @@ final class SessionController: NSObject {
         config.locationType = .outdoor
         do {
             let session = try HKWorkoutSession(healthStore: healthStore, configuration: config)
+            session.delegate = self
             session.startActivity(with: Date())
             workoutSession = session
             return true
@@ -250,5 +253,29 @@ final class SessionController: NSObject {
         }
         let requestedName = availableModels.first(where: { $0.id == requested })?.name
         return served == requestedName ? nil : served
+    }
+}
+
+extension SessionController: HKWorkoutSessionDelegate {
+    // Delegate callbacks arrive on an arbitrary queue; hop to the main
+    // actor for anything that touches UI-facing state or WKInterfaceDevice.
+    nonisolated func workoutSession(_ workoutSession: HKWorkoutSession,
+                                    didChangeTo toState: HKWorkoutSessionState,
+                                    from fromState: HKWorkoutSessionState,
+                                    date: Date) {
+        guard toState == .running else { return }
+        Task { @MainActor in
+            // Now the session is genuinely active, water lock is allowed
+            // (enabling it right after startActivity always failed:
+            // "requires an active session", Carousel error 5).
+            WKInterfaceDevice.current().enableWaterLock()
+        }
+    }
+
+    nonisolated func workoutSession(_ workoutSession: HKWorkoutSession,
+                                    didFailWithError error: Error) {
+        Task { @MainActor in
+            lastError = "Workout session error: \(error.localizedDescription)"
+        }
     }
 }
