@@ -42,7 +42,6 @@ final class SessionController: NSObject {
     private let overrideStore = StationOverrideStore()
 
     func startSession() async {
-        StartupTrace.mark("startSession entry")
         guard phase == .idle, !isStarting else { return }
         isStarting = true
         defer { isStarting = false }
@@ -61,9 +60,7 @@ final class SessionController: NSObject {
             guard let token = secrets.get(Settings.serviceTokenKey) else { return nil }
             let username = secrets.get(Settings.wgUsernameKey) ?? ""
             let microPassword = secrets.get(Settings.wgMicroPasswordKey) ?? ""
-            StartupTrace.mark("keychain reads done (detached)")
             let service = ServiceClient(baseURL: url, token: token)
-            StartupTrace.mark("ServiceClient built (URLSession.shared first touch, detached)")
             let direct = DirectWindguruClient(username: username, microPassword: microPassword)
             return FailoverProvider(service: service, direct: direct)
         }.value
@@ -73,13 +70,10 @@ final class SessionController: NSObject {
         }
         provider = built
         policy = AlertPolicy(thresholdKn: settings.thresholdKn)
-        StartupTrace.mark("providers built")
 
         locationManager.requestWhenInUseAuthorization()
-        StartupTrace.mark("CL requestWhenInUseAuthorization returned")
         locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
         locationManager.startUpdatingLocation()
-        StartupTrace.mark("CL startUpdatingLocation returned")
 
         // Workout session failure aborts the session because it's what guarantees background runtime for alerts;
         // the error stays visible on the start screen (the refresh loop, which clears lastError, never starts).
@@ -89,13 +83,11 @@ final class SessionController: NSObject {
             policy = nil
             return
         }
-        StartupTrace.mark("startWorkout returned")
         // Deliberately NO auto water lock (user decision 2026-07-15): it
         // blocks ALL touches until a crown-turn eject — including tapping
         // OK on a wind alert on dry land. The rider enables it manually
         // from Control Center when actually entering the water.
         phase = .running
-        StartupTrace.mark("phase = .running")
         startRefreshLoop()
     }
 
@@ -118,16 +110,13 @@ final class SessionController: NSObject {
     }
 
     private func startWorkout() async -> Bool {
-        StartupTrace.mark("startWorkout entry")
         guard HKHealthStore.isHealthDataAvailable() else {
             lastError = "Health data unavailable"
             return false
         }
-        StartupTrace.mark("isHealthDataAvailable done")
         do {
             try await healthStore.requestAuthorization(
                 toShare: [HKObjectType.workoutType()], read: [])
-            StartupTrace.mark("HK requestAuthorization done")
         } catch {
             lastError = "Health authorization failed: \(error.localizedDescription)"
             return false

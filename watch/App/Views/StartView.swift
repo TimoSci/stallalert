@@ -27,7 +27,6 @@ struct StartView: View {
             Text("Alert below \(Int(session.settings.thresholdKn)) kn")
                 .font(.footnote).foregroundStyle(.secondary)
             Button {
-                StartupTrace.mark("tap received")
                 Task { await session.startSession() }
             } label: {
                 if session.isStarting {
@@ -35,7 +34,6 @@ struct StartView: View {
                         ProgressView()
                         Text("Starting…")
                     }
-                    .onAppear { StartupTrace.mark("starting UI appeared") }
                 } else {
                     Text("Start Session")
                 }
