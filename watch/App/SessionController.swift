@@ -47,18 +47,27 @@ final class SessionController: NSObject {
         isStarting = true
         defer { isStarting = false }
 
-        let secrets = KeychainStore()
-        guard let url = settings.serviceURL, let token = secrets.get(Settings.serviceTokenKey) else {
+        // Keychain reads measured at 1.1–1.7 s EACH on-device with a cold
+        // daemon (startup trace, 2026-07-15) — off the main actor, so the
+        // UI shows the starting state instead of freezing. The detached
+        // task builds its own KeychainStore; only Sendable strings cross.
+        let (token, username, microPassword) = await Task.detached(priority: .userInitiated) {
+            let secrets = KeychainStore()
+            return (secrets.get(Settings.serviceTokenKey),
+                    secrets.get(Settings.wgUsernameKey),
+                    secrets.get(Settings.wgMicroPasswordKey))
+        }.value
+        StartupTrace.mark("keychain reads done (off-main)")
+        guard let url = settings.serviceURL, let token else {
             lastError = "Configure service URL and token in Settings"
             return
         }
-        StartupTrace.mark("token keychain read done")
         let service = ServiceClient(baseURL: url, token: token)
-        let direct = DirectWindguruClient(username: secrets.get(Settings.wgUsernameKey) ?? "",
-                                          microPassword: secrets.get(Settings.wgMicroPasswordKey) ?? "")
+        let direct = DirectWindguruClient(username: username ?? "",
+                                          microPassword: microPassword ?? "")
         provider = FailoverProvider(service: service, direct: direct)
         policy = AlertPolicy(thresholdKn: settings.thresholdKn)
-        StartupTrace.mark("providers built (2 more keychain reads)")
+        StartupTrace.mark("providers built")
 
         locationManager.requestWhenInUseAuthorization()
         StartupTrace.mark("CL requestWhenInUseAuthorization returned")
