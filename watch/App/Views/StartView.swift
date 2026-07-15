@@ -35,6 +35,7 @@ struct StartView: View {
                         ProgressView()
                         Text("Starting…")
                     }
+                    .onAppear { StartupTrace.mark("starting UI appeared") }
                 } else {
                     Text("Start Session")
                 }

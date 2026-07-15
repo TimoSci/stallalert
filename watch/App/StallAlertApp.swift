@@ -27,6 +27,34 @@ struct StallAlertApp: App {
         StartupTrace.mark("seeder done")
         _session = State(initialValue: SessionController())
         StartupTrace.mark("controller ready (Settings.load incl. keychain)")
+
+        // Warm the slow daemons off-main at launch so the session-start
+        // path hits them warm. Measured cold costs (startup traces,
+        // 2026-07-15): 1.1–1.7 s PER keychain read, ~3 s for
+        // URLSession.shared's first touch. The idle seconds on the start
+        // screen absorb this instead of the tap.
+        Task.detached(priority: .utility) {
+            _ = KeychainStore().get(Settings.serviceTokenKey)
+            _ = URLSession.shared.configuration
+            StartupTrace.mark("daemon prewarm done (detached)")
+        }
+
+        // TEMP diagnostic (with StartupTrace): heartbeat that logs any
+        // main-thread stall beyond ~0.5 s for the first 2 minutes, stamped
+        // at the moment the stall ENDS — locates blocks that happen where
+        // no trace mark lives (e.g. before a queued tap is delivered).
+        Task { @MainActor in
+            var last = Date()
+            while Date().timeIntervalSince(StartupTrace.t0) < 120 {
+                try? await Task.sleep(for: .milliseconds(250))
+                let now = Date()
+                let gap = now.timeIntervalSince(last)
+                if gap > 0.75 {
+                    StartupTrace.mark("MAIN-THREAD STALL ~\(String(format: "%.2f", gap - 0.25))s ended")
+                }
+                last = now
+            }
+        }
     }
 
     var body: some Scene {
