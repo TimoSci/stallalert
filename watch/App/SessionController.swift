@@ -90,9 +90,10 @@ final class SessionController: NSObject {
             return
         }
         StartupTrace.mark("startWorkout returned")
-        // Water lock is enabled from the workout-session delegate once the
-        // session reports .running — calling it here raced the async
-        // activation and always failed (Carousel error 5, observed live).
+        // Deliberately NO auto water lock (user decision 2026-07-15): it
+        // blocks ALL touches until a crown-turn eject — including tapping
+        // OK on a wind alert on dry land. The rider enables it manually
+        // from Control Center when actually entering the water.
         phase = .running
         StartupTrace.mark("phase = .running")
         startRefreshLoop()
@@ -269,13 +270,10 @@ extension SessionController: HKWorkoutSessionDelegate {
                                     didChangeTo toState: HKWorkoutSessionState,
                                     from fromState: HKWorkoutSessionState,
                                     date: Date) {
-        guard toState == .running else { return }
-        Task { @MainActor in
-            // Now the session is genuinely active, water lock is allowed
-            // (enabling it right after startActivity always failed:
-            // "requires an active session", Carousel error 5).
-            WKInterfaceDevice.current().enableWaterLock()
-        }
+        // No action on state changes today. (Auto water lock briefly lived
+        // here and was removed by user decision 2026-07-15 — it blocked
+        // alert acknowledgment on dry land; the rider locks manually from
+        // Control Center when entering the water.)
     }
 
     nonisolated func workoutSession(_ workoutSession: HKWorkoutSession,
