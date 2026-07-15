@@ -47,25 +47,31 @@ final class SessionController: NSObject {
         isStarting = true
         defer { isStarting = false }
 
-        // Keychain reads measured at 1.1–1.7 s EACH on-device with a cold
-        // daemon (startup trace, 2026-07-15) — off the main actor, so the
-        // UI shows the starting state instead of freezing. The detached
-        // task builds its own KeychainStore; only Sendable strings cross.
-        let (token, username, microPassword) = await Task.detached(priority: .userInitiated) {
-            let secrets = KeychainStore()
-            return (secrets.get(Settings.serviceTokenKey),
-                    secrets.get(Settings.wgUsernameKey),
-                    secrets.get(Settings.wgMicroPasswordKey))
-        }.value
-        StartupTrace.mark("keychain reads done (off-main)")
-        guard let url = settings.serviceURL, let token else {
+        guard let url = settings.serviceURL else {
             lastError = "Configure service URL and token in Settings"
             return
         }
-        let service = ServiceClient(baseURL: url, token: token)
-        let direct = DirectWindguruClient(username: username ?? "",
-                                          microPassword: microPassword ?? "")
-        provider = FailoverProvider(service: service, direct: direct)
+        // The ENTIRE provider build runs off the main actor: keychain reads
+        // measured 1.1–1.7 s EACH cold, and the first touch of
+        // URLSession.shared (inside ServiceClient's default arg) blocked
+        // main for ~3 s on a cold launch (startup traces, 2026-07-15).
+        // Only Sendable values cross: url/strings in, the actor out.
+        let built = await Task.detached(priority: .userInitiated) { () -> FailoverProvider? in
+            let secrets = KeychainStore()
+            guard let token = secrets.get(Settings.serviceTokenKey) else { return nil }
+            let username = secrets.get(Settings.wgUsernameKey) ?? ""
+            let microPassword = secrets.get(Settings.wgMicroPasswordKey) ?? ""
+            StartupTrace.mark("keychain reads done (detached)")
+            let service = ServiceClient(baseURL: url, token: token)
+            StartupTrace.mark("ServiceClient built (URLSession.shared first touch, detached)")
+            let direct = DirectWindguruClient(username: username, microPassword: microPassword)
+            return FailoverProvider(service: service, direct: direct)
+        }.value
+        guard let built else {
+            lastError = "Configure service URL and token in Settings"
+            return
+        }
+        provider = built
         policy = AlertPolicy(thresholdKn: settings.thresholdKn)
         StartupTrace.mark("providers built")
 
